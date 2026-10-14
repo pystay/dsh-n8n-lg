@@ -8,11 +8,7 @@ interface CapturedCall {
 
 function jsonResponse(body: unknown, status = 200) {
   const text = typeof body === 'string' ? body : JSON.stringify(body)
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    text: async () => text
-  }
+  return { ok: status >= 200 && status < 300, status, text: async () => text }
 }
 
 function makeClient(
@@ -42,52 +38,71 @@ describe('N8nClient 构造校验', () => {
   })
 })
 
-describe('N8nClient.listWorkflows', () => {
-  it('拼接查询参数、带 X-N8N-API-KEY 头、解析 data/nextCursor', async () => {
+describe('N8nClient.listWorkflows（照搬 n8n GET /api/v1/workflows）', () => {
+  it('拼接全部查询参数、带 X-N8N-API-KEY 头、原样返回 data/nextCursor', async () => {
     const { client, calls } = makeClient(() =>
       jsonResponse({ data: [{ id: '1', name: 'wf', active: true }], nextCursor: 'c1' })
     )
-    const res = await client.listWorkflows({ active: true, limit: 10 })
-    expect(res.workflows).toHaveLength(1)
-    expect(res.workflows[0]?.name).toBe('wf')
+    const res = await client.listWorkflows({
+      active: true,
+      name: 'wf',
+      tags: 'a,b',
+      limit: 10,
+      cursor: 'c0',
+      projectId: 'p1',
+      excludePinnedData: true
+    })
+    expect(res.data).toHaveLength(1)
+    expect(res.data[0]?.name).toBe('wf')
     expect(res.nextCursor).toBe('c1')
-    expect(calls[0]?.url).toBe('https://n8n.test/api/v1/workflows?active=true&limit=10')
+    expect(calls[0]?.url).toBe(
+      'https://n8n.test/api/v1/workflows?active=true&tags=a%2Cb&name=wf&limit=10&cursor=c0&projectId=p1&excludePinnedData=true'
+    )
     expect(calls[0]?.init.headers['X-N8N-API-KEY']).toBe('secret-key')
     expect(calls[0]?.init.method).toBe('GET')
   })
 
-  it('data 非数组时返回空列表', async () => {
-    const { client } = makeClient(() => jsonResponse({}))
-    const res = await client.listWorkflows()
-    expect(res.workflows).toEqual([])
-    expect(res.nextCursor).toBeUndefined()
+  it('无参数时不带查询串', async () => {
+    const { client, calls } = makeClient(() => jsonResponse({ data: [] }))
+    await client.listWorkflows()
+    expect(calls[0]?.url).toBe('https://n8n.test/api/v1/workflows')
   })
 })
 
-describe('N8nClient.getExecution', () => {
-  it('映射执行字段，includeData 控制查询参数', async () => {
+describe('N8nClient.getExecution（照搬 n8n GET /api/v1/executions/{id}）', () => {
+  it('原样返回执行对象，includeData 等参数正确编码', async () => {
     const { client, calls } = makeClient(() =>
       jsonResponse({
-        id: 42,
+        id: '42',
         status: 'success',
         finished: true,
         mode: 'webhook',
         workflowId: 'wf1',
-        startedAt: '2026-01-01T00:00:00.000Z',
         data: { resultData: {} }
       })
     )
-    const res = await client.getExecution('42', true)
-    expect(res.executionId).toBe('42')
+    const res = await client.getExecution('42', { includeData: true, redactExecutionData: false })
+    expect(res.id).toBe('42')
     expect(res.status).toBe('success')
-    expect(res.finished).toBe(true)
     expect(res.workflowId).toBe('wf1')
     expect(res.data).toEqual({ resultData: {} })
-    expect(calls[0]?.url).toBe('https://n8n.test/api/v1/executions/42?includeData=true')
+    expect(calls[0]?.url).toBe(
+      'https://n8n.test/api/v1/executions/42?includeData=true&redactExecutionData=false'
+    )
   })
 })
 
-describe('N8nClient.triggerWebhook', () => {
+describe('N8nClient.listExecutions（照搬 n8n GET /api/v1/executions）', () => {
+  it('拼接 workflowId/status/limit 等参数', async () => {
+    const { client, calls } = makeClient(() => jsonResponse({ data: [], nextCursor: null }))
+    await client.listExecutions({ workflowId: 'wf1', status: 'error', limit: 5 })
+    expect(calls[0]?.url).toBe(
+      'https://n8n.test/api/v1/executions?workflowId=wf1&status=error&limit=5'
+    )
+  })
+})
+
+describe('N8nClient.triggerWebhook（n8n 无触发端点 → 走 Webhook）', () => {
   it('POST 到生产 /webhook/{path}，发送 JSON body 并解析结果', async () => {
     const { client, calls } = makeClient(() => jsonResponse({ ok: true, value: 7 }))
     const res = await client.triggerWebhook('my/hook', { a: 1 })
@@ -100,7 +115,7 @@ describe('N8nClient.triggerWebhook', () => {
     expect(calls[0]?.init.headers['Content-Type']).toBe('application/json')
   })
 
-  it('test=true 时走 /webhook-test/', async () => {
+  it('test=true 时走 /webhook-test/ 且去除首尾斜杠', async () => {
     const { client, calls } = makeClient(() => jsonResponse({ ok: true }))
     await client.triggerWebhook('/leading/slash/', {}, { test: true })
     expect(calls[0]?.url).toBe('https://n8n.test/webhook-test/leading/slash')
@@ -112,6 +127,12 @@ describe('N8nClient.triggerWebhook', () => {
     })
     await client.triggerWebhook('h', {})
     expect(calls[0]?.init.headers['X-Hook-Token']).toBe('tok')
+  })
+
+  it('payload 缺省时发送 {}', async () => {
+    const { client, calls } = makeClient(() => jsonResponse({}))
+    await client.triggerWebhook('h')
+    expect(calls[0]?.init.body).toBe('{}')
   })
 
   it('非 2xx 抛 N8nApiError', async () => {

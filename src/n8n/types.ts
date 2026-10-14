@@ -1,45 +1,47 @@
 /**
- * n8n 数据类型（基于 n8n 2.44.0 公开 API 核验后的最小子集）。
+ * n8n 数据类型 —— 与 n8n 公开 API（2.44.0 源码核验）保持一致的字段。
+ * 说明：为「完完全全照搬 n8n」，这里只声明已知字段，其余字段用索引签名原样透传。
  */
 
-/** `GET /api/v1/workflows` 返回的单条工作流（只保留插件需要的字段）。 */
+/** 单条工作流（`GET /api/v1/workflows` 的 data[] 元素）。 */
 export interface WorkflowSummary {
   id: string
   name: string
-  /** 是否启用。注意：新版本 n8n 已弃用，改用 activeVersionId !== null。 */
+  /** 已弃用：改用 activeVersionId !== null。 */
   active: boolean
   activeVersionId?: string | null
-  tags?: string[]
+  tags?: unknown
+  createdAt?: string
   updatedAt?: string
+  [key: string]: unknown
 }
 
-export interface ListWorkflowsResult {
-  workflows: WorkflowSummary[]
-  /** 分页游标，传给下一次请求的 cursor。 */
-  nextCursor?: string
+/** `GET /api/v1/workflows` 响应（n8n 原始结构）。 */
+export interface WorkflowsListResponse {
+  data: WorkflowSummary[]
+  nextCursor?: string | null
+  [key: string]: unknown
 }
 
-/** 执行状态（n8n `status` 枚举）。 */
-export type ExecutionStatus =
-  | 'new'
-  | 'running'
-  | 'success'
-  | 'error'
-  | 'canceled'
-  | 'crashed'
-  | 'waiting'
-  | 'unknown'
-
-export interface ExecutionDetail {
-  executionId: string
-  status: ExecutionStatus
+/** 单条执行（`GET /api/v1/executions/{id}`，n8n 原始结构）。 */
+export interface ExecutionResponse {
+  id: string
+  /** 已弃用：改用 status。 */
   finished?: boolean
   mode?: string
+  status?: string
   workflowId?: string
   startedAt?: string
   stoppedAt?: string
-  /** 仅当 includeData=true 时返回。 */
   data?: unknown
+  [key: string]: unknown
+}
+
+/** `GET /api/v1/executions` 响应。 */
+export interface ExecutionsListResponse {
+  data: ExecutionResponse[]
+  nextCursor?: string | null
+  [key: string]: unknown
 }
 
 /** Webhook 触发结果。 */
@@ -47,10 +49,6 @@ export interface TriggerResult {
   ok: boolean
   /** HTTP 状态码。 */
   status: number
-  /**
-   * 工作流返回体。仅当 Webhook 节点 responseMode 为 `lastNode` 或
-   * `responseNode`（配合 Respond to Webhook）时才有执行结果；
-   * `onReceived` 模式下通常为空。
-   */
+  /** 工作流返回体原样透传（responseMode=lastNode/responseNode 时才有执行结果）。 */
   result?: unknown
 }

@@ -1,20 +1,21 @@
 /**
- * n8n 客户端（通信层）。
+ * n8n 客户端（通信层）—— 完全照搬 n8n 公开 API。
  *
- * 基于 n8n 2.44.0 公开 API 核验：
- * - 公开 API 基址 `/api/v1`，鉴权头为 `X-N8N-API-KEY`（不是 Bearer）。
- * - 公开 API **没有触发工作流的端点**，触发一律 POST 工作流自身的 Webhook URL：
+ * 依据 n8n 2.44.0 源码（packages/cli/src/public-api/v1/handlers/<resource>/spec/paths）：
+ * - 基址 `/api/v1`，鉴权头 `X-N8N-API-KEY`（不是 Bearer）。
+ * - 公开 API **没有触发端点**；触发一律 POST 工作流自身的 Webhook：
  *   生产 `{base}/webhook/{path}`，测试 `{base}/webhook-test/{path}`。
+ * - 响应体原样透传，不做字段改名/裁剪。
  *
- * 本模块是纯逻辑（仅依赖全局 fetch），不 import DSH 运行时，便于单元测试。
+ * 纯逻辑（仅依赖全局 fetch），不 import DSH 运行时，便于单元/集成测试。
  */
 import { normalizeWebhookPath } from './guard.js'
 import type {
-  ExecutionDetail,
-  ExecutionStatus,
-  ListWorkflowsResult,
+  ExecutionResponse,
+  ExecutionsListResponse,
   TriggerResult,
-  WorkflowSummary
+  WorkflowSummary,
+  WorkflowsListResponse
 } from './types.js'
 
 export interface N8nClientOptions {
@@ -30,12 +31,34 @@ export interface N8nClientOptions {
   fetchImpl?: typeof fetch
 }
 
+/** `GET /api/v1/workflows` 查询参数（与 n8n 一一对应）。 */
 export interface ListWorkflowsParams {
   active?: boolean
   tags?: string
   name?: string
   limit?: number
   cursor?: string
+  projectId?: string
+  excludePinnedData?: boolean
+}
+
+/** `GET /api/v1/executions` 查询参数（与 n8n 一一对应）。 */
+export interface ListExecutionsParams {
+  workflowId?: string
+  projectId?: string
+  status?: string
+  limit?: number
+  cursor?: string
+  includeData?: boolean
+  startedAfter?: string
+  startedBefore?: string
+}
+
+/** `GET /api/v1/executions/{id}` 查询参数（与 n8n 一一对应）。 */
+export interface GetExecutionParams {
+  includeData?: boolean
+  ignoreDataSizeLimit?: boolean
+  redactExecutionData?: boolean
 }
 
 /** n8n API 返回非 2xx 时抛出。 */
@@ -51,6 +74,11 @@ export class N8nApiError extends Error {
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000
+
+/** 把布尔值序列化为 n8n 期望的 'true'/'false' 字符串。 */
+function boolParam(value: boolean | undefined): string | undefined {
+  return value === undefined ? undefined : String(value)
+}
 
 export class N8nClient {
   private readonly base: string
@@ -69,52 +97,68 @@ export class N8nClient {
     this.fetchImpl = options.fetchImpl ?? fetch
   }
 
-  /** 列出工作流。GET /api/v1/workflows */
-  async listWorkflows(params: ListWorkflowsParams = {}): Promise<ListWorkflowsResult> {
+  /** 列出工作流。GET /api/v1/workflows（响应原样返回）。 */
+  async listWorkflows(params: ListWorkflowsParams = {}): Promise<WorkflowsListResponse> {
     const query = new URLSearchParams()
-    if (params.active !== undefined) query.set('active', String(params.active))
-    if (params.tags) query.set('tags', params.tags)
-    if (params.name) query.set('name', params.name)
-    if (params.limit !== undefined) query.set('limit', String(params.limit))
-    if (params.cursor) query.set('cursor', params.cursor)
-
-    const qs = query.toString()
-    const body = await this.request<{ data?: WorkflowSummary[]; nextCursor?: string }>(
-      `/api/v1/workflows${qs ? `?${qs}` : ''}`
-    )
-    return {
-      workflows: Array.isArray(body.data) ? body.data : [],
-      nextCursor: body.nextCursor
+    const set = (k: string, v: string | undefined) => {
+      if (v !== undefined) query.set(k, v)
     }
+    set('active', boolParam(params.active))
+    set('tags', params.tags)
+    set('name', params.name)
+    set('limit', params.limit === undefined ? undefined : String(params.limit))
+    set('cursor', params.cursor)
+    set('projectId', params.projectId)
+    set('excludePinnedData', boolParam(params.excludePinnedData))
+    const qs = query.toString()
+    return this.request<WorkflowsListResponse>(`/api/v1/workflows${qs ? `?${qs}` : ''}`)
   }
 
-  /** 取单个工作流详情。GET /api/v1/workflows/{id} */
+  /** 取单个工作流。GET /api/v1/workflows/{id} */
   async getWorkflow(workflowId: string): Promise<WorkflowSummary> {
     return this.request<WorkflowSummary>(`/api/v1/workflows/${encodeURIComponent(workflowId)}`)
   }
 
-  /** 查询执行状态。GET /api/v1/executions/{id} */
-  async getExecution(executionId: string, includeData = false): Promise<ExecutionDetail> {
-    const qs = includeData ? '?includeData=true' : ''
-    const raw = await this.request<Record<string, unknown>>(
-      `/api/v1/executions/${encodeURIComponent(executionId)}${qs}`
-    )
-    return {
-      executionId: String(raw.id ?? executionId),
-      status: (raw.status as ExecutionStatus) ?? 'unknown',
-      finished: typeof raw.finished === 'boolean' ? raw.finished : undefined,
-      mode: typeof raw.mode === 'string' ? raw.mode : undefined,
-      workflowId: raw.workflowId !== undefined ? String(raw.workflowId) : undefined,
-      startedAt: typeof raw.startedAt === 'string' ? raw.startedAt : undefined,
-      stoppedAt: typeof raw.stoppedAt === 'string' ? raw.stoppedAt : undefined,
-      data: raw.data
+  /** 列出执行。GET /api/v1/executions */
+  async listExecutions(params: ListExecutionsParams = {}): Promise<ExecutionsListResponse> {
+    const query = new URLSearchParams()
+    const set = (k: string, v: string | undefined) => {
+      if (v !== undefined) query.set(k, v)
     }
+    set('workflowId', params.workflowId)
+    set('projectId', params.projectId)
+    set('status', params.status)
+    set('limit', params.limit === undefined ? undefined : String(params.limit))
+    set('cursor', params.cursor)
+    set('includeData', boolParam(params.includeData))
+    set('startedAfter', params.startedAfter)
+    set('startedBefore', params.startedBefore)
+    const qs = query.toString()
+    return this.request<ExecutionsListResponse>(`/api/v1/executions${qs ? `?${qs}` : ''}`)
+  }
+
+  /** 查询单个执行。GET /api/v1/executions/{id}（响应原样返回）。 */
+  async getExecution(
+    executionId: string,
+    params: GetExecutionParams = {}
+  ): Promise<ExecutionResponse> {
+    const query = new URLSearchParams()
+    const set = (k: string, v: string | undefined) => {
+      if (v !== undefined) query.set(k, v)
+    }
+    set('includeData', boolParam(params.includeData))
+    set('ignoreDataSizeLimit', boolParam(params.ignoreDataSizeLimit))
+    set('redactExecutionData', boolParam(params.redactExecutionData))
+    const qs = query.toString()
+    return this.request<ExecutionResponse>(
+      `/api/v1/executions/${encodeURIComponent(executionId)}${qs ? `?${qs}` : ''}`
+    )
   }
 
   /**
    * 触发工作流：POST 到 Webhook URL。
    * @param webhookPath Webhook 节点配置的路径（不含前导 /webhook）。
-   * @param payload     JSON 请求体。
+   * @param payload     JSON 请求体（任意 JSON）。
    * @param options.test 使用 /webhook-test/ 而非 /webhook/。
    */
   async triggerWebhook(
@@ -123,7 +167,8 @@ export class N8nClient {
     options: { test?: boolean } = {}
   ): Promise<TriggerResult> {
     const prefix = options.test ? 'webhook-test' : 'webhook'
-    const url = `${this.base}/${prefix}/${normalizeWebhookPath(webhookPath)}`
+    const path = normalizeWebhookPath(webhookPath)
+    const url = `${this.base}/${prefix}/${path}`
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -139,18 +184,18 @@ export class N8nClient {
     })
 
     const text = await res.text()
-    let result: unknown = text
-    if (text) {
+    let result: unknown
+    if (!text) {
+      result = undefined
+    } else {
       try {
         result = JSON.parse(text)
       } catch {
         result = text
       }
-    } else {
-      result = undefined
     }
 
-    if (!res.ok) throw new N8nApiError(res.status, `${prefix}/${normalizeWebhookPath(webhookPath)}`, text)
+    if (!res.ok) throw new N8nApiError(res.status, `${prefix}/${path}`, text)
     return { ok: true, status: res.status, result }
   }
 

@@ -51,11 +51,15 @@ dsh plugin --profile web add dsh-n8n-lg
 
 ## 提供的工具
 
-| 工具 | 作用 |
+| 工具 | 对应 n8n 接口 |
 |---|---|
-| `n8n_list_workflows` | 列出工作流（可按 `active` / `name` 过滤，支持分页 cursor） |
-| `n8n_trigger_workflow` | 通过 Webhook 触发工作流，返回执行结果（同步模式下） |
-| `n8n_get_execution_status` | 按 executionId 查询执行状态与详情 |
+| `n8n_list_workflows` | `GET /api/v1/workflows` |
+| `n8n_get_workflow` | `GET /api/v1/workflows/{id}` |
+| `n8n_trigger_workflow` | `POST {n8n}/webhook/{path}`（n8n 公开 API 无触发端点） |
+| `n8n_get_execution_status` | `GET /api/v1/executions/{id}` |
+| `n8n_list_executions` | `GET /api/v1/executions` |
+
+参数名、取值语义与响应体均与 n8n 公开 API 保持一致，响应**原样透传**（不做字段改名/裁剪）。
 
 ## 安全
 
