@@ -51,7 +51,14 @@
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
       })
       .then(function (res) {
-        return res.json()
+        return res.text().then(function (text) {
+          try {
+            return JSON.parse(text)
+          } catch (e) {
+            /* 非 JSON 响应（例如 DSH 兜底 404 的纯文本 "not found"）→ 包装成结构化错误 */
+            return { ok: false, httpStatus: res.status, error: 'HTTP ' + res.status + '：' + (text || '').slice(0, 120) }
+          }
+        })
       })
   }
 

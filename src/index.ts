@@ -74,12 +74,30 @@ export function apply(ctx: Context, config: Config): void {
     registerSandboxTools(ctx, sandbox)
   }
 
-  // 玻璃 HUD 的服务端代理路由（仅在宿主提供 webServer 时，如 Web / 桌面端 profile）。
-  const webServer = (ctx as unknown as { webServer?: WebServerLike }).webServer
-  if (webServer) {
-    ctx.effect(() => registerHudRoutes(webServer, { getConfig: () => config }), 'dsh-n8n-lg: hud routes')
+  // 玻璃 HUD 的服务端代理路由。
+  // 用 `ctx.inject(['webServer'], cb)` 等 webServer 就绪后再注册——直接读
+  // `ctx.webServer` 可能在它尚未 provide 时拿到 undefined，导致路由缺失
+  // （前端就会收到 DSH 兜底的纯文本 "not found"，JSON 解析报错）。
+  const ctxAny = ctx as unknown as {
+    webServer?: WebServerLike
+    inject?: (deps: string[], cb: (child: unknown) => void) => unknown
+  }
+
+  const mountHudRoutes = (target: unknown): void => {
+    const ws = (target as { webServer?: WebServerLike }).webServer ?? ctxAny.webServer
+    if (!ws) {
+      log('warn', '宿主无 webServer，HUD 代理路由未注册')
+      return
+    }
+    const child = target as { effect?: (cb: () => unknown, label?: string) => unknown }
+    const dispose = registerHudRoutes(ws, { getConfig: () => config })
+    if (typeof child.effect === 'function') child.effect(() => dispose, 'dsh-n8n-lg: hud routes')
     log('info', `HUD 代理路由已注册：${HUD_ROUTE_PREFIX}/*`)
+  }
+
+  if (typeof ctxAny.inject === 'function') {
+    ctxAny.inject(['webServer'], mountHudRoutes)
   } else {
-    log('info', '宿主无 webServer，HUD 代理路由未注册（工具仍可用）')
+    mountHudRoutes(ctx)
   }
 }
