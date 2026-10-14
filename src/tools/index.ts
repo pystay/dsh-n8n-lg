@@ -156,4 +156,118 @@ export function registerTools(ctx: Context, client: N8nClient, config: Config): 
       }
     })
   )
+
+  // 6) 创建工作流 —— POST /api/v1/workflows
+  ctx.tools.register(
+    defineTool({
+      name: 'n8n_create_workflow',
+      description:
+        'Create an n8n workflow (POST /api/v1/workflows). Pass the full n8n workflow JSON (name, nodes, connections, settings).',
+      parameters: {
+        workflow: { type: 'json', required: true, description: 'Full workflow JSON object.' }
+      },
+      output: jsonOutput,
+      async execute(args) {
+        const wf = args.workflow as { name?: unknown }
+        if (!wf || typeof wf !== 'object' || typeof wf.name !== 'string') {
+          throw new Error('workflow 必须是含 name 的 JSON 对象')
+        }
+        return asJson(await client.createWorkflow(wf as never))
+      }
+    })
+  )
+
+  // 7) 更新工作流 —— PUT /api/v1/workflows/{id}
+  ctx.tools.register(
+    defineTool({
+      name: 'n8n_update_workflow',
+      description: 'Update an n8n workflow (PUT /api/v1/workflows/{id}).',
+      parameters: {
+        workflowId: { type: 'string', required: true, description: 'The workflow ID.' },
+        workflow: { type: 'json', required: true, description: 'Fields to update (e.g. name/nodes/connections).' }
+      },
+      output: jsonOutput,
+      async execute(args) {
+        return asJson(await client.updateWorkflow(args.workflowId, args.workflow as never))
+      }
+    })
+  )
+
+  // 8) 删除工作流 —— DELETE /api/v1/workflows/{id}（需先停用）
+  ctx.tools.register(
+    defineTool({
+      name: 'n8n_delete_workflow',
+      description:
+        'Delete an n8n workflow (DELETE /api/v1/workflows/{id}). An active workflow must be deactivated first.',
+      parameters: {
+        workflowId: { type: 'string', required: true, description: 'The workflow ID.' }
+      },
+      output: jsonOutput,
+      async execute(args) {
+        await client.deleteWorkflow(args.workflowId)
+        return asJson({ deleted: true, workflowId: args.workflowId })
+      }
+    })
+  )
+
+  // 9) 启用工作流 —— POST /api/v1/workflows/{id}/publish（回退 /activate）
+  ctx.tools.register(
+    defineTool({
+      name: 'n8n_activate_workflow',
+      description: 'Activate (publish) an n8n workflow so its triggers/webhooks become live.',
+      parameters: {
+        workflowId: { type: 'string', required: true, description: 'The workflow ID.' }
+      },
+      output: jsonOutput,
+      async execute(args) {
+        return asJson(await client.activateWorkflow(args.workflowId))
+      }
+    })
+  )
+
+  // 10) 停用工作流 —— POST /api/v1/workflows/{id}/deactivate
+  ctx.tools.register(
+    defineTool({
+      name: 'n8n_deactivate_workflow',
+      description: 'Deactivate an n8n workflow.',
+      parameters: {
+        workflowId: { type: 'string', required: true, description: 'The workflow ID.' }
+      },
+      output: jsonOutput,
+      async execute(args) {
+        return asJson(await client.deactivateWorkflow(args.workflowId))
+      }
+    })
+  )
+
+  // 11) 重试执行 —— POST /api/v1/executions/{id}/retry
+  ctx.tools.register(
+    defineTool({
+      name: 'n8n_retry_execution',
+      description: 'Retry a failed n8n execution (POST /api/v1/executions/{id}/retry).',
+      parameters: {
+        executionId: { type: 'string', required: true, description: 'The execution ID.' },
+        loadWorkflow: { type: 'boolean', description: 'Load the workflow from DB before retrying.' }
+      },
+      output: jsonOutput,
+      async execute(args) {
+        return asJson(await client.retryExecution(args.executionId, args.loadWorkflow ?? false))
+      }
+    })
+  )
+
+  // 12) 停止执行 —— POST /api/v1/executions/{id}/stop
+  ctx.tools.register(
+    defineTool({
+      name: 'n8n_stop_execution',
+      description: 'Stop a running n8n execution (POST /api/v1/executions/{id}/stop).',
+      parameters: {
+        executionId: { type: 'string', required: true, description: 'The execution ID.' }
+      },
+      output: jsonOutput,
+      async execute(args) {
+        return asJson(await client.stopExecution(args.executionId))
+      }
+    })
+  )
 }

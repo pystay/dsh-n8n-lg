@@ -61,6 +61,15 @@ export interface GetExecutionParams {
   redactExecutionData?: boolean
 }
 
+/** 工作流请求体（n8n workflow 结构原样透传）。 */
+export interface WorkflowBody {
+  name: string
+  nodes: unknown[]
+  connections: unknown
+  settings?: unknown
+  [key: string]: unknown
+}
+
 /** n8n API 返回非 2xx 时抛出。 */
 export class N8nApiError extends Error {
   constructor(
@@ -80,6 +89,11 @@ function boolParam(value: boolean | undefined): string | undefined {
   return value === undefined ? undefined : String(value)
 }
 
+interface RequestInitLite {
+  method?: string
+  body?: unknown
+}
+
 export class N8nClient {
   private readonly base: string
   private readonly apiKey: string
@@ -97,21 +111,20 @@ export class N8nClient {
     this.fetchImpl = options.fetchImpl ?? fetch
   }
 
-  /** 列出工作流。GET /api/v1/workflows（响应原样返回）。 */
+  // ---------------- Workflows ----------------
+
+  /** 列出工作流。GET /api/v1/workflows */
   async listWorkflows(params: ListWorkflowsParams = {}): Promise<WorkflowsListResponse> {
-    const query = new URLSearchParams()
-    const set = (k: string, v: string | undefined) => {
-      if (v !== undefined) query.set(k, v)
-    }
-    set('active', boolParam(params.active))
-    set('tags', params.tags)
-    set('name', params.name)
-    set('limit', params.limit === undefined ? undefined : String(params.limit))
-    set('cursor', params.cursor)
-    set('projectId', params.projectId)
-    set('excludePinnedData', boolParam(params.excludePinnedData))
-    const qs = query.toString()
-    return this.request<WorkflowsListResponse>(`/api/v1/workflows${qs ? `?${qs}` : ''}`)
+    const query = buildQuery({
+      active: boolParam(params.active),
+      tags: params.tags,
+      name: params.name,
+      limit: params.limit === undefined ? undefined : String(params.limit),
+      cursor: params.cursor,
+      projectId: params.projectId,
+      excludePinnedData: boolParam(params.excludePinnedData)
+    })
+    return this.request<WorkflowsListResponse>(`/api/v1/workflows${query}`)
   }
 
   /** 取单个工作流。GET /api/v1/workflows/{id} */
@@ -119,41 +132,98 @@ export class N8nClient {
     return this.request<WorkflowSummary>(`/api/v1/workflows/${encodeURIComponent(workflowId)}`)
   }
 
-  /** 列出执行。GET /api/v1/executions */
-  async listExecutions(params: ListExecutionsParams = {}): Promise<ExecutionsListResponse> {
-    const query = new URLSearchParams()
-    const set = (k: string, v: string | undefined) => {
-      if (v !== undefined) query.set(k, v)
-    }
-    set('workflowId', params.workflowId)
-    set('projectId', params.projectId)
-    set('status', params.status)
-    set('limit', params.limit === undefined ? undefined : String(params.limit))
-    set('cursor', params.cursor)
-    set('includeData', boolParam(params.includeData))
-    set('startedAfter', params.startedAfter)
-    set('startedBefore', params.startedBefore)
-    const qs = query.toString()
-    return this.request<ExecutionsListResponse>(`/api/v1/executions${qs ? `?${qs}` : ''}`)
+  /** 创建工作流。POST /api/v1/workflows */
+  async createWorkflow(body: WorkflowBody): Promise<WorkflowSummary> {
+    return this.request<WorkflowSummary>('/api/v1/workflows', { method: 'POST', body })
   }
 
-  /** 查询单个执行。GET /api/v1/executions/{id}（响应原样返回）。 */
-  async getExecution(
-    executionId: string,
-    params: GetExecutionParams = {}
-  ): Promise<ExecutionResponse> {
-    const query = new URLSearchParams()
-    const set = (k: string, v: string | undefined) => {
-      if (v !== undefined) query.set(k, v)
+  /** 更新工作流。PUT /api/v1/workflows/{id} */
+  async updateWorkflow(workflowId: string, body: Partial<WorkflowBody>): Promise<WorkflowSummary> {
+    return this.request<WorkflowSummary>(`/api/v1/workflows/${encodeURIComponent(workflowId)}`, {
+      method: 'PUT',
+      body
+    })
+  }
+
+  /** 删除工作流。DELETE /api/v1/workflows/{id}（激活中的工作流需先停用） */
+  async deleteWorkflow(workflowId: string): Promise<void> {
+    await this.request<unknown>(`/api/v1/workflows/${encodeURIComponent(workflowId)}`, {
+      method: 'DELETE'
+    })
+  }
+
+  /**
+   * 启用工作流。优先 POST /workflows/{id}/publish（新版），404/405 时回退 /activate（旧版）。
+   */
+  async activateWorkflow(workflowId: string): Promise<unknown> {
+    const id = encodeURIComponent(workflowId)
+    try {
+      return await this.request<unknown>(`/api/v1/workflows/${id}/publish`, {
+        method: 'POST',
+        body: {}
+      })
+    } catch (err) {
+      if (err instanceof N8nApiError && (err.status === 404 || err.status === 405)) {
+        return this.request<unknown>(`/api/v1/workflows/${id}/activate`, { method: 'POST', body: {} })
+      }
+      throw err
     }
-    set('includeData', boolParam(params.includeData))
-    set('ignoreDataSizeLimit', boolParam(params.ignoreDataSizeLimit))
-    set('redactExecutionData', boolParam(params.redactExecutionData))
-    const qs = query.toString()
+  }
+
+  /** 停用工作流。POST /api/v1/workflows/{id}/deactivate */
+  async deactivateWorkflow(workflowId: string): Promise<unknown> {
+    return this.request<unknown>(`/api/v1/workflows/${encodeURIComponent(workflowId)}/deactivate`, {
+      method: 'POST',
+      body: {}
+    })
+  }
+
+  // ---------------- Executions ----------------
+
+  /** 列出执行。GET /api/v1/executions */
+  async listExecutions(params: ListExecutionsParams = {}): Promise<ExecutionsListResponse> {
+    const query = buildQuery({
+      workflowId: params.workflowId,
+      projectId: params.projectId,
+      status: params.status,
+      limit: params.limit === undefined ? undefined : String(params.limit),
+      cursor: params.cursor,
+      includeData: boolParam(params.includeData),
+      startedAfter: params.startedAfter,
+      startedBefore: params.startedBefore
+    })
+    return this.request<ExecutionsListResponse>(`/api/v1/executions${query}`)
+  }
+
+  /** 查询单个执行。GET /api/v1/executions/{id} */
+  async getExecution(executionId: string, params: GetExecutionParams = {}): Promise<ExecutionResponse> {
+    const query = buildQuery({
+      includeData: boolParam(params.includeData),
+      ignoreDataSizeLimit: boolParam(params.ignoreDataSizeLimit),
+      redactExecutionData: boolParam(params.redactExecutionData)
+    })
     return this.request<ExecutionResponse>(
-      `/api/v1/executions/${encodeURIComponent(executionId)}${qs ? `?${qs}` : ''}`
+      `/api/v1/executions/${encodeURIComponent(executionId)}${query}`
     )
   }
+
+  /** 重试执行。POST /api/v1/executions/{id}/retry */
+  async retryExecution(executionId: string, loadWorkflow = false): Promise<ExecutionResponse> {
+    return this.request<ExecutionResponse>(
+      `/api/v1/executions/${encodeURIComponent(executionId)}/retry`,
+      { method: 'POST', body: { loadWorkflow } }
+    )
+  }
+
+  /** 停止执行。POST /api/v1/executions/{id}/stop */
+  async stopExecution(executionId: string): Promise<ExecutionResponse> {
+    return this.request<ExecutionResponse>(`/api/v1/executions/${encodeURIComponent(executionId)}/stop`, {
+      method: 'POST',
+      body: {}
+    })
+  }
+
+  // ---------------- Webhook trigger ----------------
 
   /**
    * 触发工作流：POST 到 Webhook URL。
@@ -199,21 +269,39 @@ export class N8nClient {
     return { ok: true, status: res.status, result }
   }
 
-  private async request<T>(path: string): Promise<T> {
+  // ---------------- internals ----------------
+
+  private async request<T>(path: string, init: RequestInitLite = {}): Promise<T> {
+    const headers: Record<string, string> = {
+      'X-N8N-API-KEY': this.apiKey,
+      Accept: 'application/json'
+    }
+    let body: string | undefined
+    if (init.body !== undefined) {
+      headers['Content-Type'] = 'application/json'
+      body = JSON.stringify(init.body)
+    }
     const res = await this.fetchImpl(`${this.base}${path}`, {
-      method: 'GET',
-      headers: {
-        'X-N8N-API-KEY': this.apiKey,
-        Accept: 'application/json'
-      },
+      method: init.method ?? 'GET',
+      headers,
+      body,
       signal: AbortSignal.timeout(this.timeoutMs)
     })
     const text = await res.text()
     if (!res.ok) throw new N8nApiError(res.status, path, text)
+    if (!text) return undefined as T
     try {
       return JSON.parse(text) as T
     } catch {
       throw new N8nApiError(res.status, path, `响应不是合法 JSON: ${text.slice(0, 200)}`)
     }
   }
+}
+
+/** 构造查询串（忽略 undefined，非空时带前导 ?）。 */
+function buildQuery(params: Record<string, string | undefined>): string {
+  const query = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) if (v !== undefined) query.set(k, v)
+  const qs = query.toString()
+  return qs ? `?${qs}` : ''
 }

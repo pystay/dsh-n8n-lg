@@ -158,3 +158,64 @@ describe('N8nClient 错误处理', () => {
     await expect(client.listWorkflows()).rejects.toBeInstanceOf(N8nApiError)
   })
 })
+
+describe('N8nClient 工作流 CRUD（照搬 n8n）', () => {
+  it('createWorkflow → POST /api/v1/workflows', async () => {
+    const { client, calls } = makeClient(() => jsonResponse({ id: 'w1', name: 'x' }))
+    const body = { name: 'x', nodes: [], connections: {} }
+    const res = await client.createWorkflow(body)
+    expect(res.id).toBe('w1')
+    expect(calls[0]?.init.method).toBe('POST')
+    expect(calls[0]?.url).toBe('https://n8n.test/api/v1/workflows')
+    expect(calls[0]?.init.headers['Content-Type']).toBe('application/json')
+    expect(calls[0]?.init.body).toBe(JSON.stringify(body))
+  })
+
+  it('updateWorkflow → PUT /api/v1/workflows/{id}', async () => {
+    const { client, calls } = makeClient(() => jsonResponse({ id: 'w1' }))
+    await client.updateWorkflow('w1', { name: 'y' })
+    expect(calls[0]?.init.method).toBe('PUT')
+    expect(calls[0]?.url).toBe('https://n8n.test/api/v1/workflows/w1')
+  })
+
+  it('deleteWorkflow → DELETE（空响应体不报错）', async () => {
+    const { client, calls } = makeClient(() => jsonResponse('', 200))
+    await client.deleteWorkflow('w1')
+    expect(calls[0]?.init.method).toBe('DELETE')
+    expect(calls[0]?.url).toBe('https://n8n.test/api/v1/workflows/w1')
+  })
+
+  it('activateWorkflow 优先 POST /publish', async () => {
+    const { client, calls } = makeClient(() => jsonResponse({ active: true }))
+    await client.activateWorkflow('w1')
+    expect(calls[0]?.url).toBe('https://n8n.test/api/v1/workflows/w1/publish')
+  })
+
+  it('activateWorkflow 在 /publish 404 时回退 /activate', async () => {
+    const { client, calls } = makeClient((url) =>
+      url.includes('/publish') ? jsonResponse({ message: 'nf' }, 404) : jsonResponse({ active: true })
+    )
+    await client.activateWorkflow('w1')
+    expect(calls).toHaveLength(2)
+    expect(calls[1]?.url).toBe('https://n8n.test/api/v1/workflows/w1/activate')
+  })
+
+  it('deactivateWorkflow → POST /deactivate', async () => {
+    const { client, calls } = makeClient(() => jsonResponse({ active: false }))
+    await client.deactivateWorkflow('w1')
+    expect(calls[0]?.url).toBe('https://n8n.test/api/v1/workflows/w1/deactivate')
+  })
+
+  it('retryExecution → POST /retry 带 loadWorkflow', async () => {
+    const { client, calls } = makeClient(() => jsonResponse({ id: '100' }))
+    await client.retryExecution('100', true)
+    expect(calls[0]?.url).toBe('https://n8n.test/api/v1/executions/100/retry')
+    expect(calls[0]?.init.body).toBe(JSON.stringify({ loadWorkflow: true }))
+  })
+
+  it('stopExecution → POST /stop', async () => {
+    const { client, calls } = makeClient(() => jsonResponse({ id: '100', status: 'canceled' }))
+    await client.stopExecution('100')
+    expect(calls[0]?.url).toBe('https://n8n.test/api/v1/executions/100/stop')
+  })
+})

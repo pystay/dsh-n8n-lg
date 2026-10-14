@@ -58,17 +58,39 @@ beforeAll(async () => {
       if (req.headers['x-n8n-api-key'] !== API_KEY) {
         return sendJson(res, 401, { message: 'unauthorized' })
       }
-      if (url.pathname === '/api/v1/workflows') {
+      if (req.method === 'GET' && url.pathname === '/api/v1/workflows') {
         return sendJson(res, 200, { data: [WORKFLOW], nextCursor: null })
       }
-      if (url.pathname === '/api/v1/workflows/1') {
+      if (req.method === 'GET' && url.pathname === '/api/v1/workflows/1') {
         return sendJson(res, 200, WORKFLOW)
       }
-      if (url.pathname === '/api/v1/executions') {
+      if (req.method === 'GET' && url.pathname === '/api/v1/executions') {
         return sendJson(res, 200, { data: [EXECUTION], nextCursor: null })
       }
-      if (url.pathname === '/api/v1/executions/100') {
+      if (req.method === 'GET' && url.pathname === '/api/v1/executions/100') {
         return sendJson(res, 200, EXECUTION)
+      }
+      // 工作流 CRUD / 执行操作
+      if (req.method === 'POST' && url.pathname === '/api/v1/workflows') {
+        return sendJson(res, 201, { id: 'w-new', name: 'new-wf', active: false })
+      }
+      if (req.method === 'PUT' && url.pathname === '/api/v1/workflows/w-new') {
+        return sendJson(res, 200, { id: 'w-new', name: 'renamed', active: false })
+      }
+      if (req.method === 'POST' && url.pathname === '/api/v1/workflows/w-new/publish') {
+        return sendJson(res, 200, { id: 'w-new', active: true })
+      }
+      if (req.method === 'POST' && url.pathname === '/api/v1/workflows/w-new/deactivate') {
+        return sendJson(res, 200, { id: 'w-new', active: false })
+      }
+      if (req.method === 'DELETE' && url.pathname === '/api/v1/workflows/w-new') {
+        return sendJson(res, 200, {})
+      }
+      if (req.method === 'POST' && url.pathname === '/api/v1/executions/100/retry') {
+        return sendJson(res, 200, { id: '101', status: 'new' })
+      }
+      if (req.method === 'POST' && url.pathname === '/api/v1/executions/100/stop') {
+        return sendJson(res, 200, { id: '100', status: 'canceled' })
       }
     }
 
@@ -116,14 +138,21 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
 }
 
 describe('E2E：工具 → N8nClient → n8n(本地复刻)', () => {
-  it('注册了全部 5 个工具', () => {
+  it('注册了全部 12 个 n8n 工具', () => {
     const { tools } = collectTools(makeConfig())
     expect([...tools.keys()].sort()).toEqual([
+      'n8n_activate_workflow',
+      'n8n_create_workflow',
+      'n8n_deactivate_workflow',
+      'n8n_delete_workflow',
       'n8n_get_execution_status',
       'n8n_get_workflow',
       'n8n_list_executions',
       'n8n_list_workflows',
-      'n8n_trigger_workflow'
+      'n8n_retry_execution',
+      'n8n_stop_execution',
+      'n8n_trigger_workflow',
+      'n8n_update_workflow'
     ])
   })
 
@@ -188,5 +217,40 @@ describe('E2E：工具 → N8nClient → n8n(本地复刻)', () => {
   it('API Key 错误时公开 API 抛错（服务端 401）', async () => {
     const { tools, exec } = collectTools(makeConfig({ apiKey: 'wrong-key' }))
     await expect(tools.get('n8n_list_workflows')!.execute({}, exec)).rejects.toThrow(/401/)
+  })
+
+  it('工作流生命周期：create → activate → deactivate → delete', async () => {
+    const { tools, exec } = collectTools(makeConfig())
+    const created = (await tools
+      .get('n8n_create_workflow')!
+      .execute({ workflow: { name: 'new-wf', nodes: [], connections: {} } }, exec)) as { id: string }
+    expect(created.id).toBe('w-new')
+
+    const act = (await tools.get('n8n_activate_workflow')!.execute({ workflowId: 'w-new' }, exec)) as {
+      active: boolean
+    }
+    expect(act.active).toBe(true)
+
+    const deact = (await tools
+      .get('n8n_deactivate_workflow')!
+      .execute({ workflowId: 'w-new' }, exec)) as { active: boolean }
+    expect(deact.active).toBe(false)
+
+    const del = (await tools.get('n8n_delete_workflow')!.execute({ workflowId: 'w-new' }, exec)) as {
+      deleted: boolean
+    }
+    expect(del.deleted).toBe(true)
+  })
+
+  it('n8n_retry_execution / n8n_stop_execution 正常返回', async () => {
+    const { tools, exec } = collectTools(makeConfig())
+    const r = (await tools.get('n8n_retry_execution')!.execute({ executionId: '100' }, exec)) as {
+      id: string
+    }
+    expect(r.id).toBe('101')
+    const s = (await tools.get('n8n_stop_execution')!.execute({ executionId: '100' }, exec)) as {
+      status: string
+    }
+    expect(s.status).toBe('canceled')
   })
 })

@@ -160,4 +160,20 @@ export class DockerSandbox {
       return false
     }
   }
+
+  /** 删除容器（`docker rm -f`；数据卷保留，不丢数据）。 */
+  async remove(): Promise<void> {
+    const res = await this.run([DOCKER, 'rm', '-f', this.config.containerName])
+    if (res.code !== 0) throw new Error(`docker rm 失败：${res.stderr.trim() || res.code}`)
+  }
+
+  /** 轮询等待 n8n 就绪（/healthz 返回 200），超时返回 false。 */
+  async waitUntilHealthy(timeoutMs = 60_000, intervalMs = 2000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs
+    for (;;) {
+      if (await this.health()) return true
+      if (Date.now() >= deadline) return false
+      await new Promise((resolve) => setTimeout(resolve, intervalMs))
+    }
+  }
 }

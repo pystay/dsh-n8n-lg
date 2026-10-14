@@ -67,9 +67,16 @@ dsh plugin --profile web add dsh-n8n-lg
 |---|---|
 | `n8n_list_workflows` | `GET /api/v1/workflows` |
 | `n8n_get_workflow` | `GET /api/v1/workflows/{id}` |
+| `n8n_create_workflow` | `POST /api/v1/workflows` |
+| `n8n_update_workflow` | `PUT /api/v1/workflows/{id}` |
+| `n8n_delete_workflow` | `DELETE /api/v1/workflows/{id}` |
+| `n8n_activate_workflow` | `POST /api/v1/workflows/{id}/publish`（回退 `/activate`） |
+| `n8n_deactivate_workflow` | `POST /api/v1/workflows/{id}/deactivate` |
 | `n8n_trigger_workflow` | `POST {n8n}/webhook/{path}`（n8n 公开 API 无触发端点） |
 | `n8n_get_execution_status` | `GET /api/v1/executions/{id}` |
 | `n8n_list_executions` | `GET /api/v1/executions` |
+| `n8n_retry_execution` | `POST /api/v1/executions/{id}/retry` |
+| `n8n_stop_execution` | `POST /api/v1/executions/{id}/stop` |
 
 参数名、取值语义与响应体均与 n8n 公开 API 保持一致，响应**原样透传**（不做字段改名/裁剪）。
 
@@ -83,6 +90,9 @@ dsh plugin --profile web add dsh-n8n-lg
 | `n8n_sandbox_stop` | 停止容器 |
 | `n8n_sandbox_status` | 状态 + `/healthz` 健康探测 |
 | `n8n_sandbox_logs` | 读取容器日志 |
+| `n8n_sandbox_remove` | 删除容器（保留数据卷，不丢数据） |
+
+启用沙箱后，插件会把沙箱注册为 Cordis 服务 **`ctx.n8nSandbox`**，其他插件可 `inject: ['n8nSandbox']` 复用。`n8n_sandbox_start` 会在启动后轮询 `/healthz` 直到 n8n 就绪。
 
 > 详见 [`docs/dsh-n8n-lg-n8n沙箱设计.md`](./docs/dsh-n8n-lg-n8n沙箱设计.md)。前置条件：Docker 守护进程需已启动。
 

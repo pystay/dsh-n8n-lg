@@ -148,3 +148,28 @@ describe('DockerSandbox.stop / logs / health', () => {
     expect(await new DockerSandbox(CONFIG).health()).toBe(false)
   })
 })
+
+describe('DockerSandbox.remove / waitUntilHealthy', () => {
+  it('remove 执行 docker rm -f', async () => {
+    const { runner, calls } = fakeRunner(() => ok())
+    await new DockerSandbox(CONFIG, runner).remove()
+    expect(calls[0]).toEqual(['docker', 'rm', '-f', 'dsh-n8n-lg'])
+  })
+
+  it('waitUntilHealthy 在就绪时返回 true', async () => {
+    let n = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: ++n >= 2 }))
+    )
+    expect(await new DockerSandbox(CONFIG).waitUntilHealthy(2000, 1)).toBe(true)
+  })
+
+  it('waitUntilHealthy 超时返回 false', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false }))
+    )
+    expect(await new DockerSandbox(CONFIG).waitUntilHealthy(30, 5)).toBe(false)
+  })
+})
