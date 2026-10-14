@@ -121,8 +121,11 @@ try {
 } finally {
   if (createdId) {
     console.log('5) 清理：停用并删除临时工作流 …')
-    // n8n 不允许直接删除激活中的工作流（会 409），必须先停用
-    await api('POST', `/api/v1/workflows/${createdId}/deactivate`, {})
+    // n8n 不允许直接删除激活中的工作流（会 409），必须先停用；
+    // 且停用后 webhook 拆除是异步的，立刻删除会撞竞态，故稍作等待。
+    const deact = await api('POST', `/api/v1/workflows/${createdId}/deactivate`, {})
+    console.log('   deactivate status =', deact.status)
+    await new Promise((r) => setTimeout(r, 1500))
     const del = await api('DELETE', `/api/v1/workflows/${createdId}`)
     console.log('   delete status =', del.status)
   }
