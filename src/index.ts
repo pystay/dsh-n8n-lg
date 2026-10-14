@@ -58,7 +58,7 @@ export function apply(ctx: Context, config: Config): void {
           ? { header: config.webhookAuthHeader, value: config.webhookAuthValue }
           : undefined
     })
-    registerTools(ctx, client, config)
+    registerTools(ctx, client, config, connection.baseUrl)
   }
 
   if (config.sandbox?.enabled) {

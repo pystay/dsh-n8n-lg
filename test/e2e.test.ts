@@ -138,10 +138,11 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
 }
 
 describe('E2E：工具 → N8nClient → n8n(本地复刻)', () => {
-  it('注册了全部 12 个 n8n 工具', () => {
+  it('注册了全部 14 个 n8n 工具', () => {
     const { tools } = collectTools(makeConfig())
     expect([...tools.keys()].sort()).toEqual([
       'n8n_activate_workflow',
+      'n8n_add_nodes',
       'n8n_create_workflow',
       'n8n_deactivate_workflow',
       'n8n_delete_workflow',
@@ -149,6 +150,7 @@ describe('E2E：工具 → N8nClient → n8n(本地复刻)', () => {
       'n8n_get_workflow',
       'n8n_list_executions',
       'n8n_list_workflows',
+      'n8n_open_editor',
       'n8n_retry_execution',
       'n8n_stop_execution',
       'n8n_trigger_workflow',

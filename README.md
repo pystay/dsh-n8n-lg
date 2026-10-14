@@ -86,6 +86,8 @@ dsh plugin --profile web add dsh-n8n-lg
 插件还带一个**玻璃拟态浮窗**，用于实时监控与快速触发，无需通过对话。
 
 - **位置**：界面右下角的玻璃球（`n8n`），点击展开为监控面板，再点 `—` 收起。
+- **内嵌编辑器**：点任意工作流的「编辑」（或由 AI 调 `n8n_open_editor`）→ 面板变宽并**内嵌 n8n 编辑器**；
+  AI 每保存一次自动刷新，你能**看着工作流一步步搭出来**。顶部还有「在系统浏览器打开」。
 - **连接配置**：面板内直接填 **n8n 地址**（默认 `http://127.0.0.1:5678`，可自定义）与 **API Key**，点「保存」（存本地 `localStorage`）。
 - **工作流**：列出工作流 + 启用状态；每个工作流可「启用/停用」；带 Webhook 节点的工作流显示「触发」按钮（快速启动）。
 - **最近执行**：显示最近 8 条执行及状态徽章。
@@ -100,6 +102,8 @@ dsh plugin --profile web add dsh-n8n-lg
 | `n8n_list_workflows` | `GET /api/v1/workflows` |
 | `n8n_get_workflow` | `GET /api/v1/workflows/{id}` |
 | `n8n_create_workflow` | `POST /api/v1/workflows` |
+| `n8n_add_nodes` | 增量加节点/连线（**可视化搭建**：一次一步，PUT 保存） |
+| `n8n_open_editor` | 让玻璃浮窗**自动打开内嵌 n8n 编辑器**（并返回编辑器 URL） |
 | `n8n_update_workflow` | `PUT /api/v1/workflows/{id}` |
 | `n8n_delete_workflow` | `DELETE /api/v1/workflows/{id}` |
 | `n8n_activate_workflow` | `POST /api/v1/workflows/{id}/publish`（回退 `/activate`） |

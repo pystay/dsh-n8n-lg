@@ -223,3 +223,47 @@ describe('registerHudRoutes', () => {
     expect(body.error).toContain('webhook path conflict')
   })
 })
+
+describe('HUD focus 路由（驱动浮窗自动打开内嵌编辑器）', () => {
+  it('POST /focus 更新 rev / workflowId，GET 读回', async () => {
+    const { webServer, getRoute } = captureRoute()
+    registerHudRoutes(webServer, { getConfig: () => makeConfig() })
+
+    const before = JSON.parse(
+      (await (async () => {
+        const r = fakeRes()
+        await getRoute().handler(fakeReq({ url: `${HUD_ROUTE_PREFIX}/focus` }), r)
+        return r
+      })()).body
+    ) as { rev: number }
+
+    const postRes = fakeRes()
+    await getRoute().handler(
+      fakeReq({
+        method: 'POST',
+        url: `${HUD_ROUTE_PREFIX}/focus`,
+        body: JSON.stringify({ workflowId: 'wf-42', note: '正在搭建' })
+      }),
+      postRes
+    )
+    const posted = JSON.parse(postRes.body)
+    expect(posted.ok).toBe(true)
+    expect(posted.workflowId).toBe('wf-42')
+    expect(posted.note).toBe('正在搭建')
+    expect(posted.rev).toBe(before.rev + 1)
+
+    const getRes = fakeRes()
+    await getRoute().handler(fakeReq({ url: `${HUD_ROUTE_PREFIX}/focus` }), getRes)
+    const got = JSON.parse(getRes.body)
+    expect(got.workflowId).toBe('wf-42')
+    expect(got.rev).toBe(posted.rev)
+  })
+
+  it('/focus 不依赖 n8n 连接配置', async () => {
+    const { webServer, getRoute } = captureRoute()
+    registerHudRoutes(webServer, { getConfig: () => makeConfig({ baseUrl: '', apiKey: '' }) })
+    const res = fakeRes()
+    await getRoute().handler(fakeReq({ url: `${HUD_ROUTE_PREFIX}/focus` }), res)
+    expect(JSON.parse(res.body).ok).toBe(true)
+  })
+})

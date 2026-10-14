@@ -24,8 +24,36 @@ export interface WebServerLike {
 
 export const HUD_ROUTE_PREFIX = '/api/dsh-n8n-lg'
 
+/** HUD 当前"聚焦"的工作流（AI 搭建时用它让浮窗自动打开内嵌编辑器）。 */
+export interface HudFocus {
+  workflowId: string | null
+  /** 每次设置都自增，客户端据此判断"有新指令"。 */
+  rev: number
+  /** 提示语（可选），例如"正在搭建：Webhook → 过滤 → 回复"。 */
+  note?: string
+}
+
 export interface HudDeps {
   getConfig: () => Config
+}
+
+/**
+ * HUD 的"聚焦"状态（模块级单例）。
+ * 工具侧调用 {@link setHudFocus} 让浮窗自动打开内嵌编辑器；浮窗轮询 GET /focus 感知变化。
+ */
+export const hudFocus: HudFocus = { workflowId: null, rev: 0 }
+
+export function setHudFocus(workflowId: string | null, note?: string): HudFocus {
+  hudFocus.workflowId = workflowId
+  if (note !== undefined) hudFocus.note = note
+  hudFocus.rev += 1
+  return hudFocus
+}
+
+/** 工作流的节点数量（n8n 列表响应里带 nodes）。 */
+function nodeCountOf(w: unknown): number {
+  const nodes = (w as { nodes?: unknown }).nodes
+  return Array.isArray(nodes) ? nodes.length : 0
 }
 
 /** 从节点列表里提取 Webhook 路径（用于 UI 的"快速触发"按钮）。 */
@@ -85,6 +113,18 @@ export function registerHudRoutes(webServer: WebServerLike, deps: HudDeps): () =
         return sendJson(res, 200, { ok: true, configured: Boolean(baseUrl && apiKey), baseUrl })
       }
 
+      // 聚焦状态：让浮窗自动打开某个工作流的内嵌编辑器（无需 n8n 连接）
+      if (sub === '/focus' && req.method === 'GET') {
+        return sendJson(res, 200, { ok: true, ...hudFocus })
+      }
+      if (sub === '/focus' && req.method === 'POST') {
+        const body = JSON.parse((await readBody(req)) || '{}') as {
+          workflowId?: string | null
+          note?: string
+        }
+        return sendJson(res, 200, { ok: true, ...setHudFocus(body.workflowId ?? null, body.note) })
+      }
+
       // 未配置连接信息：明确告知 UI（不抛 500）
       if (!baseUrl || !apiKey) {
         return sendJson(res, 200, { ok: false, configured: false, error: '尚未配置 n8n 地址或 API Key' })
@@ -102,6 +142,7 @@ export function registerHudRoutes(webServer: WebServerLike, deps: HudDeps): () =
             active: w.active,
             activeVersionId: w.activeVersionId ?? null,
             updatedAt: w.updatedAt,
+            nodeCount: nodeCountOf(w),
             webhookPaths: extractWebhookPaths((w as { nodes?: unknown }).nodes)
           }))
           return sendJson(res, 200, { ok: true, data, nextCursor: list.nextCursor ?? null })

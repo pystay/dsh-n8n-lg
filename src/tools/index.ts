@@ -6,11 +6,17 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Config } from '../config.js'
+import { setHudFocus } from '../hud/routes.js'
 import { N8nClient } from '../n8n/client.js'
 import { isWebhookPathAllowed } from '../n8n/guard.js'
 import { asJson, jsonOutput } from './common.js'
 
-export function registerTools(ctx: Context, client: N8nClient, config: Config): void {
+export function registerTools(
+  ctx: Context,
+  client: N8nClient,
+  config: Config,
+  baseUrl: string
+): void {
   // 1) 列出工作流 —— 对应 GET /api/v1/workflows
   ctx.tools.register(
     defineTool({
@@ -172,7 +178,10 @@ export function registerTools(ctx: Context, client: N8nClient, config: Config): 
         if (!wf || typeof wf !== 'object' || typeof wf.name !== 'string') {
           throw new Error('workflow 必须是含 name 的 JSON 对象')
         }
-        return asJson(await client.createWorkflow(wf as never))
+        // n8n 要求 settings 字段；缺省补 {}
+        const body = { settings: {}, ...(wf as Record<string, unknown>) }
+        if (body.settings === undefined || body.settings === null) body.settings = {}
+        return asJson(await client.createWorkflow(body as never))
       }
     })
   )
@@ -188,7 +197,13 @@ export function registerTools(ctx: Context, client: N8nClient, config: Config): 
       },
       output: jsonOutput,
       async execute(args) {
-        return asJson(await client.updateWorkflow(args.workflowId, args.workflow as never))
+        const patch = ((args.workflow ?? {}) as Record<string, unknown>)
+        // n8n 的 PUT 要求 name 必填：未提供时沿用原名称
+        if (patch.name === undefined) {
+          const cur = (await client.getWorkflow(args.workflowId)) as unknown as { name?: string }
+          patch.name = cur.name ?? 'Untitled'
+        }
+        return asJson(await client.updateWorkflow(args.workflowId, patch as never))
       }
     })
   )
@@ -214,7 +229,9 @@ export function registerTools(ctx: Context, client: N8nClient, config: Config): 
   ctx.tools.register(
     defineTool({
       name: 'n8n_activate_workflow',
-      description: 'Activate (publish) an n8n workflow so its triggers/webhooks become live.',
+      description:
+        'Activate (publish) an n8n workflow so its triggers/webhooks become live. ' +
+        'NOTE: n8n registers webhooks asynchronously — wait a few seconds before triggering the production URL.',
       parameters: {
         workflowId: { type: 'string', required: true, description: 'The workflow ID.' }
       },
@@ -270,4 +287,101 @@ export function registerTools(ctx: Context, client: N8nClient, config: Config): 
       }
     })
   )
+
+  // 13) 增量加节点 —— 可视化搭建工作流（用户在 HUD 内嵌编辑器里看着长出来）
+  ctx.tools.register(
+    defineTool({
+      name: 'n8n_add_nodes',
+      description:
+        'Append nodes (and optionally connections) to an existing n8n workflow and save it. ' +
+        'Use this to BUILD a workflow step by step so the user can watch it grow in the editor. ' +
+        'Call n8n_create_workflow first, then call this repeatedly (one logical step per call), ' +
+        'and call n8n_open_editor so the user sees the progress.',
+      parameters: {
+        workflowId: { type: 'string', required: true, description: 'Target workflow ID.' },
+        nodes: { type: 'json', required: true, description: 'Array of n8n node objects to append.' },
+        connections: {
+          type: 'json',
+          description: 'Optional n8n connections object; merged into the existing ones.'
+        }
+      },
+      output: jsonOutput,
+      async execute(args) {
+        const wf = (await client.getWorkflow(args.workflowId)) as unknown as {
+          name?: string
+          nodes?: unknown[]
+          connections?: Record<string, unknown>
+          settings?: unknown
+        }
+        const add = Array.isArray(args.nodes) ? (args.nodes as unknown[]) : []
+        if (add.length === 0) throw new Error('nodes 必须是非空数组')
+        const nodes = [...(wf.nodes ?? []), ...add]
+        const connections = mergeConnections(
+          (wf.connections ?? {}) as Record<string, { main?: unknown[][] }>,
+          (args.connections ?? {}) as Record<string, { main?: unknown[][] }>
+        )
+        const out = (await client.updateWorkflow(args.workflowId, {
+          // n8n 的 PUT 要求 name 必填，故沿用原名称
+          name: wf.name ?? 'Untitled',
+          nodes,
+          connections,
+          settings: wf.settings ?? {}
+        } as never)) as unknown as { nodes?: unknown[] }
+        return asJson({
+          ok: true,
+          workflowId: args.workflowId,
+          added: add.length,
+          nodeCount: (out.nodes ?? nodes).length
+        })
+      }
+    })
+  )
+
+  // 14) 打开编辑器 —— 让玻璃浮窗自动打开内嵌 n8n 编辑器（并返回可外部打开的 URL）
+  ctx.tools.register(
+    defineTool({
+      name: 'n8n_open_editor',
+      description:
+        'Open a workflow in the DSH glass HUD embedded n8n editor so the user can watch (and edit) live. ' +
+        'Returns the editor URL too. Call it right after creating a workflow and after each build step.',
+      parameters: {
+        workflowId: { type: 'string', description: 'Workflow ID; omit to open the workflow list.' },
+        note: { type: 'string', description: 'Short status shown in the HUD, e.g. "正在搭建：Webhook → 过滤 → 回复".' }
+      },
+      output: jsonOutput,
+      async execute(args) {
+        const focus = setHudFocus(args.workflowId ?? null, args.note)
+        const root = baseUrl.replace(/\/+$/, '')
+        const editorUrl = args.workflowId
+          ? `${root}/workflow/${encodeURIComponent(args.workflowId)}`
+          : `${root}/home/workflows`
+        return asJson({
+          ok: true,
+          rev: focus.rev,
+          editorUrl,
+          hint: '已在 DSH 玻璃浮窗中打开内嵌编辑器（浮窗会随每次保存自动刷新）'
+        })
+      }
+    })
+  )
+}
+
+/** 合并 n8n connections：同一源节点的同名分支追加链接。 */
+function mergeConnections(
+  base: Record<string, { main?: unknown[][] }>,
+  add: Record<string, { main?: unknown[][] }>
+): Record<string, { main?: unknown[][] }> {
+  const out: Record<string, { main?: unknown[][] }> = { ...base }
+  for (const [src, value] of Object.entries(add ?? {})) {
+    const prev = out[src] ?? {}
+    const prevMain = Array.isArray(prev.main) ? prev.main : []
+    const addMain = Array.isArray(value?.main) ? value.main : []
+    const len = Math.max(prevMain.length, addMain.length)
+    const main: unknown[][] = []
+    for (let i = 0; i < len; i += 1) {
+      main.push([...(prevMain[i] ?? []), ...(addMain[i] ?? [])])
+    }
+    out[src] = { ...prev, ...value, main }
+  }
+  return out
 }
