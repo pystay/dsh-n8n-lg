@@ -37,3 +37,6 @@ third_party/
 
 # WorkBuddy
 .workbuddy-ai/
+
+# npm 凭据（绝不入库）
+.npmrc
