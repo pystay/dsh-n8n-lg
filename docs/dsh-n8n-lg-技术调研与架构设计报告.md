@@ -146,7 +146,7 @@ n8n 公开 API `/api/v1`（源码：`packages/cli/src/public-api/v1/handlers/*/s
 以下问题公开检索未能定论，建议 Pystay 人工确认后再敲定方案：
 
 1. **`dsh-n8n`**：是否已存在公开/私有仓库？做到什么程度？能否直接 fork 而非从零写？（**最关键的复用机会**）
-2. **`dsh-plugin-create` / 官方脚手架命令**：精确命令名与用法（官方文档提到 `dsh plugin --profile web add <pkg>`，但独立 create 脚手架待确认）。
+2. ~~`dsh-plugin-create` / 官方脚手架命令~~ **已核验（2026-10-14，DSH 源码 + 官方发布文档）**：无需专门脚手架。插件就是一个 npm 包——`package.json` 声明 `dsh.bundle.patch` + 贡献一个 `cordis.patch.yml`（`insert: [{ id, name }]`）+ 构建后的 `lib/`，用 `dsh plugin --profile <name> add <pkg>` 安装，发布到 npm 后可被 DSH 桌面端插件市场搜到。详见《dsh-n8n-lg 适配 DSH 桌面端 技术方案》。
 3. **`dsh-hooks` / `@dsh-enhanced/event-triggers`**：确切包名/仓库；确认其 hooks 是否就是"兼容 Claude Code/Codex 协议"的那套，以便第三阶段做回调唤醒。
 4. **DSH 插件凭据安全存储机制**：当前版本对 API Key 是否有原生加密/secret 管理？需查官方"插件配置 / Secrets"文档，决定复用还是自建。
 5. ~~n8n 触发端点与参数~~ **已核验（2026-10-14，n8n 2.44.0 源码）**：公开 API 无触发端点，触发走 Webhook；`responseMode: 'lastNode'` 可同步返回结果。详见《dsh-n8n-lg 适配 DSH 桌面端 技术方案》。
