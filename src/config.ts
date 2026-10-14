@@ -25,10 +25,10 @@ export interface SandboxOptions {
 }
 
 export interface Config {
-  /** n8n 实例基址，如 https://n8n.example.com */
-  baseUrl: string
-  /** n8n 公开 API Key（敏感，放入 X-N8N-API-KEY 头，勿泄露）。 */
-  apiKey: string
+  /** n8n 实例基址（可留空：改用环境变量 N8N_BASE_URL 或沙箱端点）。 */
+  baseUrl?: string
+  /** n8n 公开 API Key（敏感）。建议改用环境变量 N8N_API_KEY，避免写入配置文件。 */
+  apiKey?: string
   /** 可选：Webhook Header 认证的请求头名。 */
   webhookAuthHeader?: string
   /** 可选：Webhook Header 认证的值（敏感）。 */
@@ -44,8 +44,8 @@ export interface Config {
 }
 
 export const Config: Schema<Config> = Schema.object({
-  baseUrl: Schema.string().required(),
-  apiKey: Schema.string().required(),
+  baseUrl: Schema.string(),
+  apiKey: Schema.string(),
   webhookAuthHeader: Schema.string(),
   webhookAuthValue: Schema.string(),
   allowedWebhookPaths: Schema.array(Schema.string()).default([]),

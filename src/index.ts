@@ -9,6 +9,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { Config } from './config.js'
+import { resolveConnection } from './config-resolve.js'
 import { N8nClient } from './n8n/client.js'
 import { DockerSandbox } from './sandbox/docker.js'
 import { registerTools } from './tools/index.js'
@@ -30,9 +31,11 @@ declare module '@deepseek-ai/cordis' {
 }
 
 export function apply(ctx: Context, config: Config): void {
+  // 连接信息：优先 config，其次环境变量（N8N_BASE_URL / N8N_API_KEY），缺失则响亮报错。
+  const { baseUrl, apiKey } = resolveConnection(config)
   const client = new N8nClient({
-    baseUrl: config.baseUrl,
-    apiKey: config.apiKey,
+    baseUrl,
+    apiKey,
     timeoutMs: config.timeoutMs,
     webhookAuth:
       config.webhookAuthHeader && config.webhookAuthValue

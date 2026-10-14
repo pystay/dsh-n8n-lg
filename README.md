@@ -42,8 +42,8 @@ dsh plugin --profile web add dsh-n8n-lg
 
 | 字段 | 必填 | 默认 | 说明 |
 |---|---|---|---|
-| `baseUrl` | 是 | — | n8n 实例基址 |
-| `apiKey` | 是 | — | n8n 公开 API Key（敏感，放入 `X-N8N-API-KEY`） |
+| `baseUrl` | 否* | 沙箱端点 / `N8N_BASE_URL` | n8n 实例基址（*缺失时回退环境变量或沙箱端点） |
+| `apiKey` | 否* | `N8N_API_KEY` | n8n 公开 API Key（敏感；**建议用环境变量，不写入配置文件**） |
 | `webhookAuthHeader` / `webhookAuthValue` | 否 | — | Webhook 节点开启 Header 认证时的头名/值 |
 | `allowedWebhookPaths` | 否 | `[]` | Webhook 路径白名单；**留空=放行全部**，生产建议显式配置（支持 `*` 通配） |
 | `timeoutMs` | 否 | `30000` | 请求超时（毫秒） |
@@ -60,6 +60,9 @@ dsh plugin --profile web add dsh-n8n-lg
 | `sandbox.containerPort` | `5678` | 容器内端口 |
 | `sandbox.dataVolume` | `dsh-n8n-lg-data` | 数据卷 |
 | `sandbox.timezone` | `Asia/Shanghai` | 容器时区 |
+
+> **密钥卫生**：`apiKey` 建议通过环境变量 **`N8N_API_KEY`** 提供（`baseUrl` 可用 `N8N_BASE_URL`），
+> 这样密钥完全不落配置文件、也不会被误提交到 Git。本项目**不会**把任何密钥写入仓库（见 `AGENTS.md`）。
 
 ## 提供的工具
 
