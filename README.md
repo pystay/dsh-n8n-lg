@@ -56,7 +56,7 @@ dsh plugin --profile web add dsh-n8n-lg
 | `sandbox.enabled` | `false` | 是否注册沙箱工具 |
 | `sandbox.image` | `docker.n8n.io/n8nio/n8n:latest` | n8n 镜像 |
 | `sandbox.containerName` | `dsh-n8n-lg` | 容器名 |
-| `sandbox.hostPort` | `5678` | 宿主端口（仅绑 127.0.0.1） |
+| `sandbox.hostPort` | `5679` | 宿主端口（仅绑 127.0.0.1；默认避开常见的 5678） |
 | `sandbox.containerPort` | `5678` | 容器内端口 |
 | `sandbox.dataVolume` | `dsh-n8n-lg-data` | 数据卷 |
 | `sandbox.timezone` | `Asia/Shanghai` | 容器时区 |

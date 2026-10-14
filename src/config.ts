@@ -55,7 +55,7 @@ export const Config: Schema<Config> = Schema.object({
     enabled: Schema.boolean().default(false),
     image: Schema.string().default('docker.n8n.io/n8nio/n8n:latest'),
     containerName: Schema.string().default('dsh-n8n-lg'),
-    hostPort: Schema.number().default(5678),
+    hostPort: Schema.number().default(5679),
     containerPort: Schema.number().default(5678),
     dataVolume: Schema.string().default('dsh-n8n-lg-data'),
     timezone: Schema.string().default('Asia/Shanghai')

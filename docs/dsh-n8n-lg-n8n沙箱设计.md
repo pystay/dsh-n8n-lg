@@ -55,7 +55,7 @@ dsh-n8n-lg 插件
 
 ```
 docker run -d --name dsh-n8n-lg \
-  -p 127.0.0.1:5678:5678 \
+  -p 127.0.0.1:5679:5678 \
   -v dsh-n8n-lg-data:/home/node/.n8n \
   --restart unless-stopped \
   -e N8N_HOST=127.0.0.1 \
@@ -70,7 +70,7 @@ docker run -d --name dsh-n8n-lg \
 |---|---|---|
 | `image` | `docker.n8n.io/n8nio/n8n:latest` | 可换官方镜像 tag |
 | `containerName` | `dsh-n8n-lg` | 容器名 |
-| `hostPort` | `5678` | 宿主端口（**仅绑 127.0.0.1**） |
+| `hostPort` | `5679` | 宿主端口（**仅绑 127.0.0.1**；默认避开常见的 5678，避免与已有 n8n 冲突） |
 | `containerPort` | `5678` | 容器内 n8n 端口 |
 | `dataVolume` | `dsh-n8n-lg-data` | 命名卷 |
 | `timezone` | `Asia/Shanghai` | `GENERIC_TIMEZONE` |
@@ -102,8 +102,8 @@ docker run -d --name dsh-n8n-lg \
 1. 启动 Docker Desktop（守护进程就绪）；
 2. 在插件 config 打开 `sandbox.enabled: true`；
 3. 让 Agent 调 `n8n_sandbox_start`（或手动 `docker run`）拉起 n8n；
-4. 浏览器打开 `http://127.0.0.1:5678` 完成 owner 初始化，并在 **Settings → API** 创建 API Key；
-5. 把 Key 填入插件 config 的 `apiKey`，`baseUrl` 设为 `http://127.0.0.1:5678`；
+4. 浏览器打开 `http://127.0.0.1:5679` 完成 owner 初始化，并在 **Settings → API** 创建 API Key；
+5. 把 Key 填入插件 config 的 `apiKey`，`baseUrl` 设为 `http://127.0.0.1:5679`；
 6. 之后 Agent 即可用 n8n 工具触发/监控沙箱内的工作流。
 
 > 说明：n8n 的公开 API Key 需在 UI 中创建（n8n 不提供纯 CLI 建 Key 的方式），因此第 4 步是必要的人工环节。
