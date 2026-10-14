@@ -6,6 +6,24 @@
  */
 import Schema from '@deepseek-ai/schemastery'
 
+/** 容器沙箱配置（用 Docker 把 n8n 跑在隔离容器里）。 */
+export interface SandboxOptions {
+  /** 是否启用沙箱工具（n8n_sandbox_*）。 */
+  enabled: boolean
+  /** n8n 镜像。 */
+  image: string
+  /** 容器名。 */
+  containerName: string
+  /** 宿主端口（仅绑定 127.0.0.1）。 */
+  hostPort: number
+  /** 容器内 n8n 端口。 */
+  containerPort: number
+  /** 数据卷名（挂到 /home/node/.n8n）。 */
+  dataVolume: string
+  /** 容器时区。 */
+  timezone: string
+}
+
 export interface Config {
   /** n8n 实例基址，如 https://n8n.example.com */
   baseUrl: string
@@ -21,6 +39,8 @@ export interface Config {
   timeoutMs: number
   /** 是否使用 /webhook-test/ 路径（开发调试用）。 */
   useTestWebhook: boolean
+  /** 容器沙箱配置。 */
+  sandbox: SandboxOptions
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -30,5 +50,14 @@ export const Config: Schema<Config> = Schema.object({
   webhookAuthValue: Schema.string(),
   allowedWebhookPaths: Schema.array(Schema.string()).default([]),
   timeoutMs: Schema.number().default(30_000),
-  useTestWebhook: Schema.boolean().default(false)
+  useTestWebhook: Schema.boolean().default(false),
+  sandbox: Schema.object({
+    enabled: Schema.boolean().default(false),
+    image: Schema.string().default('docker.n8n.io/n8nio/n8n:latest'),
+    containerName: Schema.string().default('dsh-n8n-lg'),
+    hostPort: Schema.number().default(5678),
+    containerPort: Schema.number().default(5678),
+    dataVolume: Schema.string().default('dsh-n8n-lg-data'),
+    timezone: Schema.string().default('Asia/Shanghai')
+  }).default({})
 })

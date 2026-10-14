@@ -49,6 +49,18 @@ dsh plugin --profile web add dsh-n8n-lg
 | `timeoutMs` | 否 | `30000` | 请求超时（毫秒） |
 | `useTestWebhook` | 否 | `false` | 使用 `/webhook-test/` 路径（调试用） |
 
+### 沙箱配置（`sandbox`）
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `sandbox.enabled` | `false` | 是否注册沙箱工具 |
+| `sandbox.image` | `docker.n8n.io/n8nio/n8n:latest` | n8n 镜像 |
+| `sandbox.containerName` | `dsh-n8n-lg` | 容器名 |
+| `sandbox.hostPort` | `5678` | 宿主端口（仅绑 127.0.0.1） |
+| `sandbox.containerPort` | `5678` | 容器内端口 |
+| `sandbox.dataVolume` | `dsh-n8n-lg-data` | 数据卷 |
+| `sandbox.timezone` | `Asia/Shanghai` | 容器时区 |
+
 ## 提供的工具
 
 | 工具 | 对应 n8n 接口 |
@@ -60,6 +72,19 @@ dsh plugin --profile web add dsh-n8n-lg
 | `n8n_list_executions` | `GET /api/v1/executions` |
 
 参数名、取值语义与响应体均与 n8n 公开 API 保持一致，响应**原样透传**（不做字段改名/裁剪）。
+
+### 容器沙箱工具（可选，`sandbox.enabled: true` 时注册）
+
+用 Docker 把 n8n 跑在隔离容器里（仅绑 `127.0.0.1`，数据落命名卷）：
+
+| 工具 | 作用 |
+|---|---|
+| `n8n_sandbox_start` | 启动（不存在则创建，已停止则 start），返回 endpoint |
+| `n8n_sandbox_stop` | 停止容器 |
+| `n8n_sandbox_status` | 状态 + `/healthz` 健康探测 |
+| `n8n_sandbox_logs` | 读取容器日志 |
+
+> 详见 [`docs/dsh-n8n-lg-n8n沙箱设计.md`](./docs/dsh-n8n-lg-n8n沙箱设计.md)。前置条件：Docker 守护进程需已启动。
 
 ## 安全
 

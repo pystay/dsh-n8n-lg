@@ -3,24 +3,12 @@
  *
  * 参数名、取值语义、响应体均与 n8n 公开 API（2.44.0）保持一致，不做改名或裁剪。
  */
-import { defineTool, type JsonValue } from '@deepseek-ai/dsh-tools'
+import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Config } from '../config.js'
 import { N8nClient } from '../n8n/client.js'
 import { isWebhookPathAllowed } from '../n8n/guard.js'
-
-/** 输出为原样 JSON（DSH 要求 execute 返回 canonical lossless-JSON 值）。 */
-const jsonOutput = {
-  schema: { type: 'json' as const },
-  render: (_args: unknown, value: JsonValue): Array<{ type: 'text'; text: string }> => [
-    { type: 'text', text: JSON.stringify(value, null, 2) }
-  ]
-}
-
-/** 把 n8n 原始响应转为 DSH 要求的 JSON 值。 */
-function asJson(value: unknown): JsonValue {
-  return JSON.parse(JSON.stringify(value)) as JsonValue
-}
+import { asJson, jsonOutput } from './common.js'
 
 export function registerTools(ctx: Context, client: N8nClient, config: Config): void {
   // 1) 列出工作流 —— 对应 GET /api/v1/workflows
