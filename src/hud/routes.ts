@@ -154,7 +154,20 @@ export function registerHudRoutes(webServer: WebServerLike, deps: HudDeps): () =
         return sendJson(res, 404, { ok: false, error: `未知路由：${sub}` })
       } catch (err) {
         if (err instanceof N8nApiError) {
-          return sendJson(res, 200, { ok: false, status: err.status, error: `n8n 返回 ${err.status}` })
+          // 把 n8n 返回的具体原因带出来（例如 409 的 webhook 路径冲突 reason）
+          let detail = ''
+          try {
+            const parsed = JSON.parse(err.body) as { message?: unknown; reason?: unknown }
+            const raw = parsed.message ?? parsed.reason
+            if (typeof raw === 'string') detail = raw
+          } catch {
+            /* 忽略非 JSON 错误体 */
+          }
+          return sendJson(res, 200, {
+            ok: false,
+            status: err.status,
+            error: `n8n 返回 ${err.status}${detail ? '：' + detail : ''}`
+          })
         }
         const message = err instanceof Error ? err.message : String(err)
         return sendJson(res, 200, { ok: false, error: message })

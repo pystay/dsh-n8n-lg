@@ -204,4 +204,22 @@ describe('registerHudRoutes', () => {
     await getRoute().handler(fakeReq({ url: `${HUD_ROUTE_PREFIX}/nope` }), res)
     expect(res.statusCode).toBe(404)
   })
+
+  it('激活失败时把 n8n 的具体原因带出来（如 409 冲突）', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse({ message: 'webhook path conflict' }, 409))
+    )
+    const { webServer, getRoute } = captureRoute()
+    registerHudRoutes(webServer, { getConfig: () => makeConfig() })
+    const res = fakeRes()
+    await getRoute().handler(
+      fakeReq({ method: 'POST', url: `${HUD_ROUTE_PREFIX}/workflows/w1/activate` }),
+      res
+    )
+    const body = JSON.parse(res.body)
+    expect(body.ok).toBe(false)
+    expect(body.status).toBe(409)
+    expect(body.error).toContain('webhook path conflict')
+  })
 })

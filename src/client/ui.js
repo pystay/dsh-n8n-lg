@@ -166,8 +166,14 @@ function createHud() {
         class: 'dshn8n-btn',
         text: w.active ? '停用' : '启用',
         onclick: function () {
-          NS.api('/workflows/' + encodeURIComponent(w.id) + '/' + (w.active ? 'deactivate' : 'activate'), { method: 'POST' })
-            .then(refresh)
+          var act = w.active ? 'deactivate' : 'activate'
+          flash(act === 'activate' ? '启用中…' : '停用中…')
+          NS.api('/workflows/' + encodeURIComponent(w.id) + '/' + act, { method: 'POST' })
+            .then(function (r) {
+              if (r && r.ok) flash(act === 'activate' ? '已启用' : '已停用')
+              else flash('操作失败：' + ((r && r.error) || '未知错误'))
+              refresh()
+            })
             .catch(function (e) { flash('操作失败：' + e.message) })
         },
       })
@@ -178,9 +184,22 @@ function createHud() {
             class: 'dshn8n-btn primary',
             text: '触发',
             onclick: function () {
+              if (!w.active) {
+                flash('该工作流未激活：生产 Webhook 只在激活后存在，请先点「启用」')
+                return
+              }
               flash('触发中…')
               NS.api('/trigger', { method: 'POST', body: { webhookPath: p, payload: {} } })
-                .then(function (r) { flash(r && r.ok ? '已触发 ' + p : '触发失败：' + (r && r.error)) })
+                .then(function (r) {
+                  if (r && r.ok) {
+                    var res = r.result
+                    var execId = res && typeof res === 'object' ? res.executionId : undefined
+                    flash('已触发 ' + p + (execId ? '（执行 #' + execId + '）' : ''))
+                  } else {
+                    flash('触发失败：' + ((r && r.error) || '未知错误'))
+                  }
+                  refresh()
+                })
                 .catch(function (e) { flash('触发失败：' + e.message) })
             },
           })

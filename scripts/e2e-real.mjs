@@ -78,6 +78,23 @@ try {
   if (pub.status >= 400) pub = await api('POST', `/api/v1/workflows/${createdId}/activate`, {})
   console.log('   publish status =', pub.status)
 
+  // 核对激活后 n8n 到底怎么表达"已启用"（active vs activeVersionId）
+  const afterPublish = await api('GET', `/api/v1/workflows/${createdId}`)
+  console.log(
+    '   after publish: active =',
+    afterPublish.json?.active,
+    '; activeVersionId =',
+    afterPublish.json?.activeVersionId
+  )
+  const listAfter = await api('GET', '/api/v1/workflows?limit=100')
+  const row = (listAfter.json?.data ?? []).find((w) => w.id === createdId)
+  console.log(
+    '   list row: active =',
+    row?.active,
+    '; activeVersionId =',
+    row?.activeVersionId
+  )
+
   console.log('3) 用插件 N8nClient 触发 webhook …')
   let triggered
   for (let i = 0; i < 10; i++) {
