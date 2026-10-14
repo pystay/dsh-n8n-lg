@@ -1,0 +1,6 @@
+# dsh-n8n-lg bundle patch.
+# Inserted into a profile when this bundle is installed via `dsh plugin add`.
+# The plugin row references the package by NAME (resolved from node_modules).
+- insert:
+    - id: n8n-lg
+      name: dsh-n8n-lg
