@@ -64,8 +64,24 @@ dsh plugin --profile web add dsh-n8n-lg
 > **密钥卫生**：`apiKey` 建议通过环境变量 **`N8N_API_KEY`** 提供（`baseUrl` 可用 `N8N_BASE_URL`），
 > 这样密钥完全不落配置文件、也不会被误提交到 Git。本项目**不会**把任何密钥写入仓库（见 `AGENTS.md`）。
 
-## 提供的工具
+## 在 DSH 里怎么用
 
+插件是**工具**（tool），**不需要把任何文档发给 DSH** —— 直接在对话里提需求，agent 会自动选用对应工具。
+
+**前置条件**
+1. n8n 正在运行（本机默认 `http://127.0.0.1:5678`）。
+2. 插件已装进目标 profile，并**重启该 profile / DSH 桌面端**（bundle 有变更时必须重启才会加载）。
+3. profile 配置里有 `baseUrl` + `apiKey`（或环境变量 `N8N_BASE_URL` / `N8N_API_KEY`）。
+
+**直接这样说就行（示例）**
+- 「列出我的 n8n 工作流」
+- 「查询 n8n 执行 `12345` 的状态」
+- 「触发 webhook 路径为 `deploy` 的工作流，body 传 `{"env":"prod"}`」
+- 「在 n8n 新建一个工作流：Webhook 触发 → 返回 `hello`」
+
+> 触发走的是工作流的 **Webhook 节点**：该节点要配好路径，且工作流需**已激活**（可用 `n8n_activate_workflow`）。
+
+## 提供的工具
 | 工具 | 对应 n8n 接口 |
 |---|---|
 | `n8n_list_workflows` | `GET /api/v1/workflows` |
