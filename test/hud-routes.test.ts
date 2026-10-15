@@ -106,12 +106,15 @@ describe('registerHudRoutes', () => {
     expect(JSON.parse(res.body)).toMatchObject({ ok: true, configured: false, baseUrl: null })
   })
 
-  it('/health 只暴露 origin，不泄漏密钥与路径', async () => {
+  it('/health 只暴露 origin 供展示，并单独给出编辑器基址，不泄漏密钥', async () => {
     const { getRoute } = captureRoute(makeManager({ baseUrl: 'http://n8n.test/internal/secret' }))
     const res = fakeRes()
     await getRoute().handler(fakeReq({ url: `${HUD_ROUTE_PREFIX}/health` }), res)
     const body = JSON.parse(res.body)
+    // 展示用地址脱敏到 origin
     expect(body.baseUrl).toBe('http://n8n.test')
+    // 编辑器必须打开宿主实际连接的实例（含子路径）
+    expect(body.editorBaseUrl).toBe('http://n8n.test/internal/secret')
     expect(JSON.stringify(body)).not.toContain('test-key')
   })
 

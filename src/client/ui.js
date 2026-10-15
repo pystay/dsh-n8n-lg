@@ -108,6 +108,8 @@ function createHud() {
     msgTimer: null,
     focusRev: 0,
     configured: null,
+    /** 宿主实际连接的完整基址（来自 /health 或 /config），用于拼接编辑器链接。 */
+    editorBaseUrl: null,
     editor: { open: false, workflowId: null, autoReload: true, lastStamp: '' },
   }
 
@@ -182,7 +184,9 @@ function createHud() {
   document.body.appendChild(root)
 
   function editorUrl(id) {
-    var base = (NS.loadConfig().baseUrl || '').replace(/\/+$/, '')
+    // 必须用**宿主实际连接**的地址：当连接来自环境变量/插件配置而非浮窗输入框时，
+    // 本地存储里的地址可能是另一个实例，用它会把编辑器开到错误的 n8n 上。
+    var base = (state.editorBaseUrl || NS.loadConfig().baseUrl || '').replace(/\/+$/, '')
     if (!base) return 'about:blank'
     return id ? base + '/workflow/' + encodeURIComponent(id) : base + '/home/workflows'
   }
@@ -267,9 +271,12 @@ function createHud() {
 
   function renderConn(info) {
     if (!info || info.configured === false) {
+      state.editorBaseUrl = null
       connInfo.textContent = '连接：未配置（填好地址与 API Key 后点「保存」）'
       return
     }
+    // 编辑器链接以宿主为准
+    state.editorBaseUrl = info.editorBaseUrl || null
     var src = info.source || 'config'
     var label = { runtime: '浮窗设置', config: '插件配置', env: '环境变量', sandbox: '沙箱' }[src] || src
     connInfo.textContent = '连接：' + (info.baseUrl || '') + '（来源：' + label + '）'

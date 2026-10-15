@@ -253,6 +253,38 @@ describe('HUD 浮窗交互（真实 ui.js）', () => {
     expect(frame.src).toBe(before)
   })
 
+  it('编辑器链接使用宿主实际连接，而不是浏览器本地地址（回归）', async () => {
+    let rev = 0
+    const { dom, timers } = mountHud({
+      // 本地存储里是另一个（过期的）实例
+      config: { baseUrl: 'http://stale.test', apiKey: 'k' },
+      api: async (path) => {
+        if (path === '/health')
+          return {
+            ok: true,
+            configured: true,
+            baseUrl: 'http://real.test',
+            editorBaseUrl: 'http://real.test/n8n',
+            source: 'env'
+          }
+        if (path === '/workflows') return { ok: true, data: [] }
+        if (path.startsWith('/executions')) return { ok: true, data: [] }
+        if (path === '/focus') return { ok: true, rev, workflowId: rev > 0 ? 'wf-1' : null }
+        return { ok: true }
+      }
+    })
+    await flush()
+
+    rev = 1
+    timers.intervals[0]()
+    await flush()
+    timers.flushTimeouts()
+
+    const frame = dom.all().find((n) => n.tag === 'iframe')
+    expect(frame.src).toBe('http://real.test/n8n/workflow/wf-1')
+    expect(frame.src).not.toContain('stale.test')
+  })
+
   it('保存失败时显示失败，不假成功（回归）', async () => {
     const { dom } = mountHud({
       api: async (path) => {

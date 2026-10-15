@@ -19,8 +19,16 @@ export type ConnectionSource = 'runtime' | 'config' | 'env' | 'sandbox'
 export interface ConnectionStatus {
   /** 是否已经具备可用的地址 + 密钥。 */
   configured: boolean
-  /** 脱敏后的地址（仅协议 + 主机 + 端口）；未配置为 null。 */
+  /** 脱敏后的地址（仅协议 + 主机 + 端口），用于界面展示；未配置为 null。 */
   baseUrl: string | null
+  /**
+   * 完整基址（含子路径），供 UI 拼接 n8n 编辑器链接。
+   *
+   * 为什么要单独给：{@link baseUrl} 是脱敏展示用的，而编辑器 iframe 必须打开
+   * **宿主实际连接的那个实例**——否则当连接来自环境变量/配置而非浮窗时，
+   * 浮窗会打开另一个 n8n。地址不是凭据，因此这里返回完整值。
+   */
+  editorBaseUrl: string | null
   /** 连接来自哪里，便于用户理解为什么“填了没生效”。 */
   source: ConnectionSource | null
 }
@@ -101,12 +109,13 @@ export class ConnectionManager implements ClientProvider {
     return conn
   }
 
-  /** 供前端展示的脱敏状态。 */
+  /** 供前端展示的脱敏状态 + 供编辑器拼接的完整基址。 */
   status(): ConnectionStatus {
     const conn = this.resolve()
     return {
       configured: Boolean(conn),
       baseUrl: conn ? maskBaseUrl(conn.baseUrl) : null,
+      editorBaseUrl: conn ? conn.baseUrl : null,
       source: conn ? this.source() : null
     }
   }
