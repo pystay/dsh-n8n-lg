@@ -12,7 +12,6 @@
  */
 import type { ClientProvider } from '../connection.js'
 import type { N8nClient } from './client.js'
-import type { WorkflowSummary } from './types.js'
 import { snapshots, type WorkflowSnapshot } from './snapshots.js'
 
 /** n8n 节点（结构原样透传，只声明我们校验/读取的字段）。 */
@@ -530,20 +529,5 @@ export class WorkflowEditor {
     } catch {
       return false
     }
-  }
-}
-
-/** 供工具层展示的工作流摘要（GET /workflows/{id} 的常用字段）。 */
-export function summarizeWorkflow(wf: WorkflowSummary): {
-  id: string
-  name: string
-  active: boolean
-  nodeCount: number
-} {
-  return {
-    id: wf.id,
-    name: wf.name,
-    active: Boolean(wf.active),
-    nodeCount: asNodeArray((wf as { nodes?: unknown }).nodes).length
   }
 }

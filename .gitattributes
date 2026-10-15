@@ -1,0 +1,8 @@
+# Normalise line endings so Windows contributors do not churn the whole repo.
+# Text files are stored with LF in the repository; images stay binary.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary

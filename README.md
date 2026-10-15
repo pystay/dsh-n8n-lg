@@ -213,13 +213,17 @@ dsh plugin --profile desktop add dsh-n8n-lg
    （`n8n_validate_workflow` 可以提前查出来）。
 7. **`publish` 会校验节点配置与凭据**：缺参数或缺凭据都会 400（例如 Google Sheets 的 OAuth 凭据）。
    「能保存」不等于「能激活」，更不等于「业务能跑通」。
-8. **快照只在内存里**：`n8n_snapshot_workflow` 的快照进程重启即失效，也不能替代 n8n 自身的备份。
-9. **浮窗依赖 `webServer`**：纯 headless profile 下没有浮窗（工具仍可用）。
-10. **沙箱需要 Docker**：`sandbox.enabled: true` 时 Docker 守护进程要在运行；
+8. **连线两端必须都是已存在的节点**：否则 n8n 会以
+   `400 Workflow structure is invalid … unknown_connection_target` 拒绝保存。
+   插件会在**写入前**拦下这种情况（`n8n_validate_workflow` 也能提前查），
+   所以搭建时请「先加节点，再连线」。
+9. **快照只在内存里**：`n8n_snapshot_workflow` 的快照进程重启即失效，也不能替代 n8n 自身的备份。
+10. **浮窗依赖 `webServer`**：纯 headless profile 下没有浮窗（工具仍可用）。
+11. **沙箱需要 Docker**：`sandbox.enabled: true` 时 Docker 守护进程要在运行；
     容器不是强隔离，只适合受信任的工作流。
-11. **`executeCommand` 节点在 n8n v2 默认被禁用**（安全考虑）。如果你的工作流要用它，
+12. **`executeCommand` 节点在 n8n v2 默认被禁用**（安全考虑）。如果你的工作流要用它，
     需要给 n8n 设 `NODES_EXCLUDE=[]`——这会允许工作流在你机器上执行 shell 命令，请自行权衡。
-12. **实测环境**：Windows + DSH 桌面端 + n8n 2.x。其他平台/版本我还没条件验证，欢迎反馈。
+13. **实测环境**：Windows + DSH 桌面端 + n8n 2.x。其他平台/版本我还没条件验证，欢迎反馈。
 
 ---
 
