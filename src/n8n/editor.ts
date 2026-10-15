@@ -53,6 +53,8 @@ export interface AddNodesResult {
   verified: boolean
   /** n8n 侧拒绝了写入时的原因（已做本地校验仍被拒的情况）。 */
   error?: string
+  /** 是否被会话暂停等原因拦下（未发生任何写入）。 */
+  blocked?: boolean
 }
 
 export interface UpdateResult {
@@ -64,6 +66,8 @@ export interface UpdateResult {
   verified: boolean
   /** n8n 侧拒绝了写入时的原因。 */
   error?: string
+  /** 是否被会话暂停等原因拦下（未发生任何写入）。 */
+  blocked?: boolean
 }
 
 export interface RestoreResult {
@@ -258,13 +262,24 @@ export interface AddNodesInput {
   knownTypes?: string[]
 }
 
+export interface WorkflowEditorOptions {
+  /**
+   * 写操作前的闸门：返回非空字符串表示**拒绝这次写入**（例如搭建会话被暂停）。
+   * 用它可以让「暂停」真正生效，而不只是界面上画个图标。
+   */
+  blockReason?: (workflowId: string) => string | undefined
+}
+
 export class WorkflowEditor {
   /** 每个工作流一条串行队列，避免并发写互相覆盖。 */
   private readonly queues = new Map<string, Promise<unknown>>()
   /** 已应用的步骤（幂等保护）。 */
   private readonly appliedSteps = new Map<string, Set<string>>()
 
-  constructor(private readonly provider: ClientProvider) {}
+  constructor(
+    private readonly provider: ClientProvider,
+    private readonly options: WorkflowEditorOptions = {}
+  ) {}
 
   /** 每次写操作都取「当前」客户端，连接被用户在浮窗里改掉后依然生效。 */
   private get client(): N8nClient {
@@ -339,6 +354,21 @@ export class WorkflowEditor {
     }
 
     return this.enqueue(workflowId, async () => {
+      const blocked = this.options.blockReason?.(workflowId)
+      if (blocked) {
+        return {
+          ok: false,
+          workflowId,
+          added: 0,
+          skipped: [],
+          nodeCount: 0,
+          issues: [],
+          verified: false,
+          blocked: true,
+          error: blocked
+        }
+      }
+
       const current = (await this.client.getWorkflow(workflowId)) as unknown as {
         name?: string
         nodes?: unknown
@@ -436,6 +466,19 @@ export class WorkflowEditor {
     options: { publishIfActive?: boolean; reason?: string } = {}
   ): Promise<UpdateResult> {
     return this.enqueue(workflowId, async () => {
+      const blocked = this.options.blockReason?.(workflowId)
+      if (blocked) {
+        return {
+          ok: false,
+          workflowId,
+          nodeCount: 0,
+          issues: [],
+          verified: false,
+          blocked: true,
+          error: blocked
+        }
+      }
+
       const current = (await this.client.getWorkflow(workflowId)) as unknown as {
         name?: string
         nodes?: unknown

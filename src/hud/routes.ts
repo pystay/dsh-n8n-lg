@@ -12,8 +12,10 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ConnectionManager } from '../connection.js'
 import { normalizeBaseUrl } from '../connection.js'
 import { N8nApiError } from '../n8n/client.js'
+import { analyzeCredentials } from '../n8n/credentials.js'
 import { WorkflowEditor, validateWorkflow } from '../n8n/editor.js'
 import { isWebhookPathAllowed } from '../n8n/guard.js'
+import { sessions, summarizeSession, type SessionStatus } from '../n8n/session.js'
 
 /** webServer 服务的最小结构（避免依赖 dsh-host-webserver 的类型包）。 */
 export interface WebServerLike {
@@ -118,7 +120,10 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
  */
 export function registerHudRoutes(webServer: WebServerLike, deps: HudDeps): () => void {
   const { manager } = deps
-  const editor = new WorkflowEditor(manager)
+  // 与工具层共用同一个闸门：会话暂停时，HUD 触发的写入同样被拦下
+  const editor = new WorkflowEditor(manager, {
+    blockReason: (workflowId) => sessions.pausedReason(workflowId)
+  })
 
   return webServer.register({
     kind: 'prefix',
@@ -294,10 +299,56 @@ export function registerHudRoutes(webServer: WebServerLike, deps: HudDeps): () =
           return sendJson(res, 200, await editor.restore(id, snapshotId))
         }
 
+        // 搭建会话：时间线数据 + 暂停/恢复控制
+        if (sub === '/session' && req.method === 'GET') {
+          const workflowId = url.searchParams.get('workflowId') ?? undefined
+          const session = workflowId
+            ? sessions.activeFor(workflowId) ?? sessions.latest(workflowId)
+            : sessions.list().at(-1)
+          if (!session) return sendJson(res, 200, { ok: true, session: null })
+          return sendJson(res, 200, { ok: true, session, progress: summarizeSession(session) })
+        }
+        if (sub === '/session/state' && req.method === 'POST') {
+          const body = await readJson(req)
+          const sessionId = typeof body.sessionId === 'string' ? body.sessionId : ''
+          const state = body.state as SessionStatus
+          const allowed: SessionStatus[] = ['running', 'paused', 'completed', 'cancelled', 'failed']
+          if (!sessionId) return sendJson(res, 400, { ok: false, error: '缺少 sessionId' })
+          if (!allowed.includes(state)) {
+            return sendJson(res, 400, { ok: false, error: `state 必须是 ${allowed.join(' / ')} 之一` })
+          }
+          const note = typeof body.note === 'string' ? body.note : undefined
+          const session = sessions.setStatus(sessionId, state, note)
+          if (state === 'cancelled' || state === 'failed') sessions.skipPending(sessionId, note)
+          return sendJson(res, 200, { ok: true, session, progress: summarizeSession(session) })
+        }
+
+        // 凭据向导：激活前看看还缺什么（只读元数据，不涉及任何密钥）
+        const credMatch = /^\/workflows\/([^/]+)\/credentials$/.exec(sub)
+        if (credMatch && req.method === 'GET') {
+          const id = decodeURIComponent(credMatch[1] as string)
+          const wf = (await manager.client().getWorkflow(id)) as unknown as { nodes?: unknown }
+          let available: string[] = []
+          let scopeWarning: string | undefined
+          try {
+            const list = await manager.client().listCredentials({ limit: 100 })
+            available = (list.data ?? []).map((c) => c.type).filter(Boolean)
+          } catch (err) {
+            scopeWarning =
+              '无法列出已有凭据（API Key 可能缺少 credential:list 权限）：' +
+              (err instanceof Error ? err.message : String(err))
+          }
+          const base = manager.resolve()?.baseUrl.replace(/\/+$/, '')
+          const report = analyzeCredentials(wf.nodes, available, base ? `${base}/home/credentials` : undefined)
+          return sendJson(res, 200, { ...report, scopeWarning })
+        }
+
         // 启用 / 停用工作流
         const toggle = /^\/workflows\/([^/]+)\/(activate|deactivate)$/.exec(sub)
         if (toggle && req.method === 'POST') {
           const id = decodeURIComponent(toggle[1] as string)
+          const blocked = sessions.pausedReason(id)
+          if (blocked) return sendJson(res, 200, { ok: false, blocked: true, error: blocked })
           const out =
             toggle[2] === 'activate'
               ? await manager.client().activateWorkflow(id)

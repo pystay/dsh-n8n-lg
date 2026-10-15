@@ -11,6 +11,7 @@
  */
 import { buildWebhookUrl, normalizeWebhookPath } from './guard.js'
 import type {
+  CredentialListResponse,
   ExecutionResponse,
   ExecutionsListResponse,
   TriggerResult,
@@ -203,6 +204,21 @@ export class N8nClient {
       method: 'POST',
       body: {}
     })
+  }
+
+  // ---------------- Credentials ----------------
+
+  /**
+   * 列出凭据。GET /api/v1/credentials
+   *
+   * 只返回 id/name/type 等元数据，**不含任何密钥**，因此可以安全地用于凭据体检。
+   */
+  async listCredentials(params: { limit?: number; cursor?: string } = {}): Promise<CredentialListResponse> {
+    const query = buildQuery({
+      limit: params.limit === undefined ? undefined : String(params.limit),
+      cursor: params.cursor
+    })
+    return this.request<CredentialListResponse>(`/api/v1/credentials${query}`)
   }
 
   // ---------------- Executions ----------------

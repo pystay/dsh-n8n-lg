@@ -63,6 +63,21 @@ var CSS = [
   '.dshn8n-editor-bar .t{flex:1;font-size:12px;color:#c7d0e6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
   '.dshn8n-frame{width:100%;height:min(56vh,520px);border:0;background:#0b0d16;display:block;}',
   '.dshn8n-hint{font-size:11px;color:#8a93a6;padding:6px 12px;}',
+  '.dshn8n-sess-head{display:flex;align-items:center;gap:8px;margin-bottom:6px;}',
+  '.dshn8n-sess-goal{flex:1;min-width:0;font-size:12px;color:#c7d0e6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+  '.dshn8n-bar{height:6px;border-radius:3px;background:rgba(255,255,255,.12);overflow:hidden;margin-bottom:8px;}',
+  '.dshn8n-bar>span{display:block;height:100%;width:0;background:linear-gradient(90deg,#608cff,#3ddc84);transition:width .25s ease;}',
+  '.dshn8n-step{display:flex;gap:7px;align-items:flex-start;padding:4px 0;font-size:12px;}',
+  '.dshn8n-step .ic{flex:0 0 14px;width:14px;text-align:center;}',
+  '.dshn8n-step .tx{flex:1;min-width:0;word-break:break-word;}',
+  '.dshn8n-step .sub{color:#8a93a6;font-size:10.5px;margin-top:1px;}',
+  '.dshn8n-step.done .ic{color:#3ddc84;}',
+  '.dshn8n-step.running .ic{color:#ffc247;}',
+  '.dshn8n-step.failed .ic{color:#ff8093;}',
+  '.dshn8n-step.pending .ic,.dshn8n-step.skipped .ic{color:#8a93a6;}',
+  '.dshn8n-step.failed .tx{color:#ff8093;}',
+  '.dshn8n-credbox{margin-top:6px;font-size:11.5px;color:#c7d0e6;border-left:2px solid rgba(255,194,71,.6);padding:6px 9px;background:rgba(255,194,71,.07);border-radius:0 7px 7px 0;word-break:break-word;white-space:pre-line;}',
+  '.dshn8n-credbox.ok{border-left-color:rgba(61,220,132,.6);background:rgba(61,220,132,.07);}',
 ].join('\n')
 
 function el(tag, props, children) {
@@ -110,6 +125,8 @@ function createHud() {
     configured: null,
     /** 宿主实际连接的完整基址（来自 /health 或 /config），用于拼接编辑器链接。 */
     editorBaseUrl: null,
+    /** 当前展示的搭建会话（时间线）。 */
+    session: null,
     editor: { open: false, workflowId: null, autoReload: true, lastStamp: '' },
   }
 
@@ -132,6 +149,22 @@ function createHud() {
 
   var wfList = el('div')
   var exList = el('div')
+  var credBox = el('div', { class: 'dshn8n-credbox', style: 'display:none' })
+
+  // ---- 搭建会话时间线 ----
+  var sessGoal = el('span', { class: 'dshn8n-sess-goal', text: '' })
+  var sessChip = el('span', { class: 'dshn8n-tag', text: '' })
+  var sessBar = el('span')
+  var sessSteps = el('div')
+  var sessPauseBtn = el('button', { class: 'dshn8n-btn', text: '暂停' })
+  var sessCancelBtn = el('button', { class: 'dshn8n-btn', text: '终止' })
+  var sessionSection = el('div', { class: 'dshn8n-sec', style: 'display:none' }, [
+    el('h4', { text: '搭建进度' }),
+    el('div', { class: 'dshn8n-sess-head' }, [sessGoal, sessChip]),
+    el('div', { class: 'dshn8n-bar' }, [sessBar]),
+    sessSteps,
+    el('div', { class: 'dshn8n-row' }, [sessPauseBtn, sessCancelBtn]),
+  ])
 
   var saveBtn = el('button', { class: 'dshn8n-btn primary', text: '保存' })
   var refreshBtn = el('button', { class: 'dshn8n-btn', text: '刷新' })
@@ -167,11 +200,12 @@ function createHud() {
         el('div', { class: 'dshn8n-row' }, [baseInput]),
         el('div', { class: 'dshn8n-row' }, [keyInput, saveBtn]),
       ]),
+      sessionSection,
       el('div', { class: 'dshn8n-sec' }, [
         el('h4', { text: '触发 body（JSON）' }),
         payloadInput,
       ]),
-      el('div', { class: 'dshn8n-sec' }, [el('h4', { text: '工作流' }), wfList]),
+      el('div', { class: 'dshn8n-sec' }, [el('h4', { text: '工作流' }), credBox, wfList]),
       el('div', { class: 'dshn8n-sec' }, [el('h4', { text: '最近执行' }), exMsg, exList]),
     ]),
   ])
@@ -282,6 +316,85 @@ function createHud() {
     connInfo.textContent = '连接：' + (info.baseUrl || '') + '（来源：' + label + '）'
   }
 
+  /** 渲染搭建会话时间线（AI 声明的计划 + 每步真实结果）。 */
+  function renderSession(session, progress) {
+    if (!session) {
+      sessionSection.style.display = 'none'
+      state.session = null
+      return
+    }
+    state.session = session
+    sessionSection.style.display = 'block'
+
+    var statusLabel = {
+      planning: '计划中',
+      running: '进行中',
+      paused: '已暂停',
+      completed: '已完成',
+      failed: '失败',
+      cancelled: '已终止',
+    }[session.status] || session.status
+    var percent = progress ? progress.percent : 0
+
+    sessGoal.textContent = session.goal || '(未填写目标)'
+    sessChip.textContent = statusLabel + ' ' + percent + '%'
+    sessChip.className =
+      'dshn8n-tag' + (session.status === 'completed' ? ' on' : session.status === 'running' ? '' : ' off')
+    sessBar.style.width = percent + '%'
+
+    var icons = { done: '✓', running: '◐', failed: '✕', pending: '○', skipped: '–' }
+    sessSteps.textContent = ''
+    ;(session.steps || []).forEach(function (step) {
+      var sub = []
+      if (typeof step.added === 'number') sub.push('+' + step.added + ' 节点')
+      if (typeof step.nodeCount === 'number') sub.push('共 ' + step.nodeCount + ' 节点')
+      if (step.verified === false) sub.push('读回验证未通过')
+      if (step.snapshotId) sub.push('快照 ' + step.snapshotId)
+      if (step.error) sub.push(step.error)
+      if (step.issues && step.issues.length) sub.push(step.issues[0])
+      sessSteps.appendChild(
+        el('div', { class: 'dshn8n-step ' + (step.status || 'pending') }, [
+          el('span', { class: 'ic', text: icons[step.status] || '○' }),
+          el('div', { class: 'tx' }, [
+            el('div', { text: step.title || step.id }),
+            sub.length ? el('div', { class: 'sub', text: sub.join(' · ') }) : null,
+          ]),
+        ])
+      )
+    })
+
+    var live = session.status === 'running' || session.status === 'paused'
+    sessPauseBtn.textContent = session.status === 'paused' ? '恢复' : '暂停'
+    sessPauseBtn.disabled = !live
+    sessCancelBtn.disabled = !live
+  }
+
+  /** 渲染凭据体检结果（只展示类型与入口，不涉及任何密钥）。 */
+  function renderCredReport(report) {
+    if (!report) {
+      credBox.style.display = 'none'
+      return
+    }
+    credBox.style.display = 'block'
+    credBox.className = 'dshn8n-credbox' + (report.ok ? ' ok' : '')
+    var lines = []
+    if (report.ok) {
+      lines.push('凭据检查通过：需要的 ' + ((report.requirements || []).length) + ' 项都已存在。')
+    } else {
+      lines.push('缺少 ' + (report.missing || []).length + ' 类凭据：')
+      ;(report.missing || []).forEach(function (m) {
+        var nodes = m.nodes.slice(0, 3).join('、') + (m.nodes.length > 3 ? ' 等' : '')
+        lines.push('· ' + m.credentialType + '（' + nodes + '）→ ' + m.hint)
+      })
+    }
+    if (report.credentialsUrl) lines.push('配置入口：' + report.credentialsUrl)
+    if (report.unverified && report.unverified.length) {
+      lines.push('无法判断是否需要凭据的节点：' + report.unverified.map(function (u) { return u.node }).join('、'))
+    }
+    if (report.scopeWarning) lines.push(report.scopeWarning)
+    credBox.textContent = lines.join('\n')
+  }
+
   function renderWorkflows(list) {
     wfList.textContent = ''
     if (!list || !list.length) {
@@ -297,6 +410,7 @@ function createHud() {
       var toggle = el('button', { class: 'dshn8n-btn', text: w.active ? '停用' : '启用' })
       var snapBtn = el('button', { class: 'dshn8n-btn', text: '快照' })
       var restoreBtn = el('button', { class: 'dshn8n-btn', text: '回滚' })
+      var credBtn = el('button', { class: 'dshn8n-btn', text: '凭据' })
 
       var row = el('div', { class: 'dshn8n-item' }, [
         el('span', { class: 'nm', text: w.name || w.id }),
@@ -305,7 +419,27 @@ function createHud() {
         toggle,
         snapBtn,
         restoreBtn,
+        credBtn,
       ])
+
+      credBtn.onclick = function () {
+        setBusy(credBtn, true)
+        flash('检查凭据中…')
+        NS.api('/workflows/' + encodeURIComponent(w.id) + '/credentials')
+          .then(function (r) {
+            setBusy(credBtn, false)
+            if (r && typeof r.ok === 'boolean') {
+              renderCredReport(r)
+              flash(r.ok ? '凭据齐全' : '缺少 ' + (r.missing || []).length + ' 类凭据（见下方）')
+            } else {
+              flash('检查失败：' + ((r && r.error) || '未知错误'))
+            }
+          })
+          .catch(function (e) {
+            setBusy(credBtn, false)
+            flash('检查失败：' + e.message)
+          })
+      }
 
       editBtn.onclick = function () {
         openEditor(w.id, '已打开编辑器')
@@ -498,6 +632,15 @@ function createHud() {
           exMsg.textContent = '执行列表获取失败：' + ((ex && ex.error) || '未知错误')
           exMsg.style.display = 'block'
         }
+        // 搭建会话时间线：优先看编辑器当前打开的工作流，否则看最近一次会话
+        var sessionWf = state.editor.open ? state.editor.workflowId : null
+        return NS.api('/session' + (sessionWf ? '?workflowId=' + encodeURIComponent(sessionWf) : ''))
+          .then(function (sr) {
+            if (sr && sr.ok) renderSession(sr.session, sr.progress)
+          })
+          .catch(function () {
+            /* 时间线是锦上添花，失败静默 */
+          })
       })
       .catch(function (e) {
         setStatus('err')
@@ -564,6 +707,41 @@ function createHud() {
 
   closeEditorBtn.onclick = function () {
     closeEditor()
+  }
+
+  /** 暂停 / 恢复 / 终止搭建会话（暂停期间写操作会被宿主拦下）。 */
+  function setSessionState(next, btn) {
+    var session = state.session
+    if (!session) return
+    setBusy(btn, true)
+    NS.api('/session/state', { method: 'POST', body: { sessionId: session.id, state: next } })
+      .then(function (r) {
+        setBusy(btn, false)
+        if (r && r.ok) {
+          flash(
+            next === 'paused'
+              ? '已暂停：后续写入会被拦下'
+              : next === 'running'
+                ? '已恢复'
+                : '已终止'
+          )
+          renderSession(r.session, r.progress)
+        } else {
+          flash('操作失败：' + ((r && r.error) || '未知错误'))
+        }
+      })
+      .catch(function (e) {
+        setBusy(btn, false)
+        flash('操作失败：' + e.message)
+      })
+  }
+
+  sessPauseBtn.onclick = function () {
+    setSessionState(state.session && state.session.status === 'paused' ? 'running' : 'paused', sessPauseBtn)
+  }
+
+  sessCancelBtn.onclick = function () {
+    setSessionState('cancelled', sessCancelBtn)
   }
 
   // ---- 启动 ----

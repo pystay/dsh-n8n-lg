@@ -285,6 +285,112 @@ describe('HUD 浮窗交互（真实 ui.js）', () => {
     expect(frame.src).not.toContain('stale.test')
   })
 
+  it('渲染搭建会话时间线，并可暂停（回归：此前没有进度视图）', async () => {
+    const posted = []
+    const { dom } = mountHud({
+      api: async (path, options) => {
+        if (path === '/health') return { ok: true, configured: true, baseUrl: 'http://n8n.test', source: 'runtime' }
+        if (path === '/workflows') return { ok: true, data: [] }
+        if (path.startsWith('/executions')) return { ok: true, data: [] }
+        if (path === '/focus') return { ok: true, rev: 0, workflowId: null }
+        if (path === '/session')
+          return {
+            ok: true,
+            session: {
+              id: 'sess-1',
+              workflowId: 'w1',
+              goal: '做个问候工作流',
+              status: 'running',
+              steps: [
+                { id: 's1', title: '加 Webhook', status: 'done', added: 1, nodeCount: 1, verified: true, snapshotId: 'ab12' },
+                { id: 's2', title: '加 Code', status: 'running' },
+                { id: 's3', title: '连线', status: 'pending' }
+              ]
+            },
+            progress: { total: 3, done: 1, failed: 0, skipped: 0, percent: 33 }
+          }
+        if (path === '/session/state') {
+          posted.push(options.body)
+          return { ok: true, session: { id: 'sess-1', status: 'paused', goal: 'g', steps: [] }, progress: { percent: 33 } }
+        }
+        return { ok: true }
+      }
+    })
+    await flush()
+
+    const section = dom.all().find((n) => n.className.includes('dshn8n-sec') && n.children.some((c) => c.textContent === '搭建进度'))
+    expect(section?.style.display).toBe('block')
+    const goal = dom.all().find((n) => n.className === 'dshn8n-sess-goal')
+    expect(goal.textContent).toBe('做个问候工作流')
+    const chip = dom.all().find((n) => n.className.startsWith('dshn8n-tag'))
+    expect(chip.textContent).toContain('进行中 33%')
+
+    const steps = dom.all().filter((n) => n.className.startsWith('dshn8n-step'))
+    expect(steps).toHaveLength(3)
+    expect(steps[0].className).toContain('done')
+    expect(steps[1].className).toContain('running')
+    expect(steps[2].className).toContain('pending')
+    // 结果摘要（+节点数 / 快照）要能看见
+    const subs = dom.all().filter((n) => n.className === 'sub').map((n) => n.textContent)
+    expect(subs.join(' ')).toContain('+1 节点')
+    expect(subs.join(' ')).toContain('快照 ab12')
+
+    byText(dom, '暂停').events.click()
+    await flush()
+    expect(posted[0]).toMatchObject({ sessionId: 'sess-1', state: 'paused' })
+  })
+
+  it('没有会话时不显示时间线', async () => {
+    const { dom } = mountHud({
+      api: async (path) => {
+        if (path === '/health') return { ok: true, configured: true, baseUrl: 'http://n8n.test', source: 'runtime' }
+        if (path === '/workflows') return { ok: true, data: [] }
+        if (path.startsWith('/executions')) return { ok: true, data: [] }
+        if (path === '/focus') return { ok: true, rev: 0, workflowId: null }
+        if (path === '/session') return { ok: true, session: null }
+        return { ok: true }
+      }
+    })
+    await flush()
+    const section = dom.all().find((n) => n.className.includes('dshn8n-sec') && n.children.some((c) => c.textContent === '搭建进度'))
+    expect(section?.style.display).toBe('none')
+  })
+
+  it('凭据按钮会展示缺失项与配置入口（不涉及密钥）', async () => {
+    const { dom } = mountHud({
+      api: async (path) => {
+        if (path === '/health') return { ok: true, configured: true, baseUrl: 'http://n8n.test', source: 'runtime' }
+        if (path === '/workflows')
+          return { ok: true, data: [{ id: 'w1', name: 'wf', active: true, webhooks: [] }] }
+        if (path.startsWith('/executions')) return { ok: true, data: [] }
+        if (path === '/focus') return { ok: true, rev: 0, workflowId: null }
+        if (path === '/session') return { ok: true, session: null }
+        if (path.endsWith('/credentials'))
+          return {
+            ok: false,
+            requirements: [],
+            available: ['openAiApi'],
+            missing: [
+              { credentialType: 'googleSheetsOAuth2Api', nodes: ['写表格'], hint: '在 n8n 里新建 Google Sheets OAuth2 凭据' }
+            ],
+            unverified: [],
+            credentialsUrl: 'http://n8n.test/home/credentials',
+            note: ''
+          }
+        return { ok: true }
+      }
+    })
+    await flush()
+    byText(dom, '凭据').events.click()
+    await flush()
+
+    const box = dom.all().find((n) => n.className.startsWith('dshn8n-credbox'))
+    expect(box.style.display).toBe('block')
+    expect(box.textContent).toContain('googleSheetsOAuth2Api')
+    expect(box.textContent).toContain('写表格')
+    expect(box.textContent).toContain('http://n8n.test/home/credentials')
+  })
+
   it('保存失败时显示失败，不假成功（回归）', async () => {
     const { dom } = mountHud({
       api: async (path) => {

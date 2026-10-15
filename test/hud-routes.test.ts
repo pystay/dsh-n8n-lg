@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ConnectionManager } from '../src/connection'
 import { registerHudRoutes, HUD_ROUTE_PREFIX, type WebServerLike } from '../src/hud/routes'
+import { sessions } from '../src/n8n/session'
 import type { Config } from '../src/config'
 
 function makeConfig(overrides: Partial<Config> = {}): Config {
@@ -482,5 +483,138 @@ describe('HUD 校验与回滚路由', () => {
     )
     expect(JSON.parse(res.body).ok).toBe(false)
     expect(JSON.parse(res.body).error).toContain('快照')
+  })
+})
+
+describe('HUD 搭建会话路由（时间线 + 暂停控制）', () => {
+  it('没有会话时返回 session:null（前端据此隐藏时间线）', async () => {
+    const { getRoute } = captureRoute()
+    const res = fakeRes()
+    await getRoute().handler(fakeReq({ url: `${HUD_ROUTE_PREFIX}/session?workflowId=none` }), res)
+    expect(JSON.parse(res.body)).toMatchObject({ ok: true, session: null })
+  })
+
+  it('会话状态可读、可切换，非法 state 返回 400', async () => {
+    const { getRoute } = captureRoute()
+    const session = sessions.start({
+      workflowId: 'w-hud-session',
+      goal: 'HUD 时间线测试',
+      steps: [
+        { id: 's1', title: '第一步' },
+        { id: 's2', title: '第二步' }
+      ]
+    })
+
+    const read = fakeRes()
+    await getRoute().handler(
+      fakeReq({ url: `${HUD_ROUTE_PREFIX}/session?workflowId=w-hud-session` }),
+      read
+    )
+    const body = JSON.parse(read.body)
+    expect(body.session.id).toBe(session.id)
+    expect(body.progress).toMatchObject({ total: 2, percent: 0 })
+
+    const paused = fakeRes()
+    await getRoute().handler(
+      fakeReq({
+        method: 'POST',
+        url: `${HUD_ROUTE_PREFIX}/session/state`,
+        body: JSON.stringify({ sessionId: session.id, state: 'paused' })
+      }),
+      paused
+    )
+    expect(JSON.parse(paused.body).session.status).toBe('paused')
+
+    const bad = fakeRes()
+    await getRoute().handler(
+      fakeReq({
+        method: 'POST',
+        url: `${HUD_ROUTE_PREFIX}/session/state`,
+        body: JSON.stringify({ sessionId: session.id, state: 'nope' })
+      }),
+      bad
+    )
+    expect(bad.statusCode).toBe(400)
+    expect(JSON.parse(bad.body).error).toContain('state 必须是')
+
+    sessions.setStatus(session.id, 'completed')
+  })
+
+  it('会话暂停时，HUD 触发的启用也被拦下（暂停是真生效的）', async () => {
+    const { getRoute } = captureRoute()
+    const session = sessions.start({
+      workflowId: 'w-hud-paused',
+      goal: 'g',
+      steps: [{ id: 's1', title: 'step' }]
+    })
+    sessions.setStatus(session.id, 'paused')
+
+    const fetchMock = vi.fn(async () => jsonResponse({ active: true }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const res = fakeRes()
+    await getRoute().handler(
+      fakeReq({ method: 'POST', url: `${HUD_ROUTE_PREFIX}/workflows/w-hud-paused/activate` }),
+      res
+    )
+    const body = JSON.parse(res.body)
+    expect(body.ok).toBe(false)
+    expect(body.blocked).toBe(true)
+    expect(body.error).toContain('暂停')
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    sessions.setStatus(session.id, 'completed')
+  })
+})
+
+describe('HUD 凭据向导路由', () => {
+  it('返回缺失的凭据类型、已有类型与配置入口', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (String(url).includes('/api/v1/credentials')) {
+          return jsonResponse({ data: [{ id: 'c1', name: 'OpenAI', type: 'openAiApi' }], nextCursor: null })
+        }
+        return jsonResponse({
+          id: 'w1',
+          name: 'cred',
+          nodes: [
+            { id: 'g1', name: '写表格', type: 'n8n-nodes-base.googleSheets', typeVersion: 4, position: [0, 0] }
+          ],
+          connections: {}
+        })
+      })
+    )
+    const { getRoute } = captureRoute()
+    const res = fakeRes()
+    await getRoute().handler(fakeReq({ url: `${HUD_ROUTE_PREFIX}/workflows/w1/credentials` }), res)
+    const body = JSON.parse(res.body)
+    expect(body.ok).toBe(false)
+    expect(body.missing[0].credentialType).toBe('googleSheetsOAuth2Api')
+    expect(body.available).toContain('openAiApi')
+    expect(body.credentialsUrl).toBe('http://n8n.test/home/credentials')
+  })
+
+  it('API Key 缺少 credential:list 权限时降级但仍给出结论', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (String(url).includes('/api/v1/credentials')) {
+          return jsonResponse({ message: 'Forbidden' }, 403)
+        }
+        return jsonResponse({
+          id: 'w1',
+          name: 'cred',
+          nodes: [{ id: 'g1', name: '写表格', type: 'n8n-nodes-base.googleSheets', typeVersion: 4, position: [0, 0] }],
+          connections: {}
+        })
+      })
+    )
+    const { getRoute } = captureRoute()
+    const res = fakeRes()
+    await getRoute().handler(fakeReq({ url: `${HUD_ROUTE_PREFIX}/workflows/w1/credentials` }), res)
+    const body = JSON.parse(res.body)
+    expect(body.scopeWarning).toContain('credential:list')
+    expect(body.missing[0].credentialType).toBe('googleSheetsOAuth2Api')
   })
 })

@@ -10,12 +10,35 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Config } from '../config.js'
 import type { ConnectionManager } from '../connection.js'
 import { setHudFocus } from '../hud/routes.js'
+import { analyzeCredentials } from '../n8n/credentials.js'
 import { WorkflowEditor, validateWorkflow } from '../n8n/editor.js'
 import { isWebhookPathAllowed } from '../n8n/guard.js'
+import { sessions, summarizeSession } from '../n8n/session.js'
 import { asJson, jsonOutput } from './common.js'
 
 export function registerTools(ctx: Context, manager: ConnectionManager, config: Config): void {
-  const editor = new WorkflowEditor(manager)
+  // 写操作前先过「搭建会话」这道闸门：会话暂停时写入会被拦下（暂停因此是真生效的）
+  const editor = new WorkflowEditor(manager, { blockReason: (workflowId) => sessions.pausedReason(workflowId) })
+
+  /** 把写入结果记进当前活跃的搭建会话（时间线数据来源）。 */
+  const recordStep = (
+    workflowId: string,
+    stepId: string | undefined,
+    result: {
+      added?: number
+      skipped?: string[]
+      nodeCount?: number
+      verified?: boolean
+      snapshotId?: string
+      issues?: Array<{ level: string; message: string }>
+      error?: string
+    }
+  ): void => {
+    if (!stepId) return
+    const session = sessions.activeFor(workflowId)
+    if (!session) return
+    sessions.recordResult(session.id, stepId, result)
+  }
 
   // 1) 列出工作流 —— 对应 GET /api/v1/workflows
   ctx.tools.register(
@@ -357,15 +380,20 @@ export function registerTools(ctx: Context, manager: ConnectionManager, config: 
         const knownTypes = Array.isArray(args.knownTypes)
           ? (args.knownTypes as unknown[]).filter((t): t is string => typeof t === 'string')
           : undefined
-        return asJson(
-          await editor.addNodes({
-            workflowId: args.workflowId,
-            nodes: args.nodes,
-            connections: args.connections,
-            stepId: args.stepId,
-            knownTypes
-          })
-        )
+        // 让时间线知道这一步开始了
+        if (args.stepId) {
+          const session = sessions.activeFor(args.workflowId)
+          if (session) sessions.beginStep(session.id, args.stepId)
+        }
+        const result = await editor.addNodes({
+          workflowId: args.workflowId,
+          nodes: args.nodes,
+          connections: args.connections,
+          stepId: args.stepId,
+          knownTypes
+        })
+        recordStep(args.workflowId, args.stepId, result)
+        return asJson(result)
       }
     })
   )
@@ -488,6 +516,142 @@ export function registerTools(ctx: Context, manager: ConnectionManager, config: 
       output: jsonOutput,
       async execute(args) {
         return asJson(await editor.restore(args.workflowId, args.snapshotId))
+      }
+    })
+  )
+
+  // 18) 开始搭建会话 —— 先声明计划，用户在浮窗时间线上看到全过程
+  ctx.tools.register(
+    defineTool({
+      name: 'n8n_begin_build_session',
+      description:
+        'Start a build session: declare the plan (goal + ordered steps) BEFORE building. ' +
+        'The user then watches a progress timeline in the glass panel, and can pause/resume/cancel it. ' +
+        'While a session is paused, every write is refused — so pausing really stops the build. ' +
+        'Use the same step ids here and as the `stepId` of n8n_add_nodes so results attach to the timeline.',
+      parameters: {
+        workflowId: { type: 'string', required: true, description: 'The workflow being built.' },
+        goal: {
+          type: 'string',
+          required: true,
+          description: 'What the user asked for, in one sentence (shown on the timeline).'
+        },
+        steps: {
+          type: 'json',
+          required: true,
+          description: 'Ordered steps: [{"id":"add-webhook","title":"加 Webhook 触发器","detail":"可选说明"}].'
+        }
+      },
+      output: jsonOutput,
+      async execute(args) {
+        const raw = Array.isArray(args.steps) ? (args.steps as unknown[]) : []
+        const steps: Array<{ id: string; title: string; detail?: string }> = []
+        for (const s of raw) {
+          if (!s || typeof s !== 'object') continue
+          const item = s as { id?: unknown; title?: unknown; detail?: unknown }
+          if (typeof item.id !== 'string' || !item.id) continue
+          steps.push({
+            id: item.id,
+            title: typeof item.title === 'string' && item.title ? item.title : item.id,
+            ...(typeof item.detail === 'string' ? { detail: item.detail } : {})
+          })
+        }
+        if (steps.length === 0) throw new Error('steps 必须是非空数组，且每项含 id')
+
+        const session = sessions.start({ workflowId: args.workflowId, goal: args.goal, steps })
+        return asJson({
+          ok: true,
+          sessionId: session.id,
+          workflowId: session.workflowId,
+          status: session.status,
+          progress: summarizeSession(session),
+          hint: '计划已开始。请在浮窗里打开该工作流（n8n_open_editor），逐步执行并在每步带上相同的 stepId。'
+        })
+      }
+    })
+  )
+
+  // 19) 查看搭建会话 —— 进度与每一步的结果
+  ctx.tools.register(
+    defineTool({
+      name: 'n8n_get_build_session',
+      description:
+        'Read the build session for a workflow (or a specific sessionId): status, per-step results ' +
+        '(added / verified / snapshotId / error) and overall progress.',
+      parameters: {
+        workflowId: { type: 'string', description: 'Read the latest/active session of this workflow.' },
+        sessionId: { type: 'string', description: 'Read this session by id.' }
+      },
+      output: jsonOutput,
+      async execute(args) {
+        const session = args.sessionId ? sessions.get(args.sessionId) : args.workflowId ? sessions.activeFor(args.workflowId) ?? sessions.latest(args.workflowId) : undefined
+        if (!session) {
+          return asJson({ ok: false, error: '没有找到搭建会话（可能尚未开始，或进程已重启——会话只存在内存中）' })
+        }
+        return asJson({ ok: true, session, progress: summarizeSession(session) })
+      }
+    })
+  )
+
+  // 20) 暂停 / 恢复 / 结束会话 —— 用户对搭建过程的控制权
+  ctx.tools.register(
+    defineTool({
+      name: 'n8n_set_build_session_state',
+      description:
+        'Control a build session: running (resume), paused (BLOCKS all writes until resumed), ' +
+        'completed, cancelled or failed. Use this to honour a user asking to pause or stop the build.',
+      parameters: {
+        sessionId: { type: 'string', required: true, description: 'The session id.' },
+        state: {
+          type: 'string',
+          required: true,
+          description: 'running | paused | completed | cancelled | failed'
+        },
+        note: { type: 'string', description: 'Optional note shown on the timeline.' }
+      },
+      output: jsonOutput,
+      async execute(args) {
+        const allowed = ['running', 'paused', 'completed', 'cancelled', 'failed'] as const
+        const state = args.state as (typeof allowed)[number]
+        if (!allowed.includes(state)) {
+          throw new Error(`state 必须是 ${allowed.join(' / ')} 之一`)
+        }
+        const session = sessions.setStatus(args.sessionId, state, args.note)
+        if (state === 'cancelled' || state === 'failed') sessions.skipPending(args.sessionId, args.note)
+        return asJson({ ok: true, session, progress: summarizeSession(session) })
+      }
+    })
+  )
+
+  // 21) 凭据向导 —— 激活前告诉用户还缺哪些凭据、去哪里配
+  ctx.tools.register(
+    defineTool({
+      name: 'n8n_check_credentials',
+      description:
+        'Check which credentials a workflow still needs BEFORE activating. ' +
+        'Returns the required credential types per node, which ones already exist in the instance, ' +
+        'and where to configure them. Reads only metadata (never any secret) and never asks the user ' +
+        'to paste a secret into the chat.',
+      parameters: {
+        workflowId: { type: 'string', required: true, description: 'The workflow to check.' }
+      },
+      output: jsonOutput,
+      async execute(args) {
+        const wf = (await manager.client().getWorkflow(args.workflowId)) as unknown as { nodes?: unknown }
+        const base = manager.resolve()?.baseUrl.replace(/\/+$/, '')
+        let available: string[] = []
+        let scopeWarning: string | undefined
+        try {
+          const list = await manager.client().listCredentials({ limit: 100 })
+          available = (list.data ?? []).map((c) => c.type).filter(Boolean)
+        } catch (err) {
+          // API Key 可能没有 credential:list 权限：降级为「不知道已有什么」，但结论依然有用
+          scopeWarning =
+            '无法列出已有凭据（API Key 可能缺少 credential:list 权限），因此只能报告「需要哪些凭据」：' +
+            (err instanceof Error ? err.message : String(err))
+        }
+        const report = analyzeCredentials(wf.nodes, available, base ? `${base}/home/credentials` : undefined)
+        return asJson({ ...report, scopeWarning })
       }
     })
   )

@@ -92,6 +92,12 @@ beforeAll(async () => {
       if (req.method === 'GET' && url.pathname === '/api/v1/workflows') {
         return sendJson(res, 200, { data: [WORKFLOW, ...store.values()], nextCursor: null })
       }
+      if (req.method === 'GET' && url.pathname === '/api/v1/credentials') {
+        return sendJson(res, 200, {
+          data: [{ id: 'c1', name: 'OpenAI account', type: 'openAiApi' }],
+          nextCursor: null
+        })
+      }
       if (req.method === 'GET' && url.pathname === '/api/v1/executions') {
         return sendJson(res, 200, { data: [EXECUTION], nextCursor: null })
       }
@@ -178,14 +184,17 @@ const node = (id: string, name: string, extra: Record<string, unknown> = {}) => 
 })
 
 describe('E2E：工具 → ConnectionManager → N8nClient → n8n(本地复刻)', () => {
-  it('注册了全部 17 个 n8n 工具', () => {
+  it('注册了全部 21 个 n8n 工具', () => {
     const { tools } = collectTools(makeConfig())
     expect([...tools.keys()].sort()).toEqual([
       'n8n_activate_workflow',
       'n8n_add_nodes',
+      'n8n_begin_build_session',
+      'n8n_check_credentials',
       'n8n_create_workflow',
       'n8n_deactivate_workflow',
       'n8n_delete_workflow',
+      'n8n_get_build_session',
       'n8n_get_execution_status',
       'n8n_get_workflow',
       'n8n_list_executions',
@@ -193,6 +202,7 @@ describe('E2E：工具 → ConnectionManager → N8nClient → n8n(本地复刻)
       'n8n_open_editor',
       'n8n_restore_workflow',
       'n8n_retry_execution',
+      'n8n_set_build_session_state',
       'n8n_snapshot_workflow',
       'n8n_stop_execution',
       'n8n_trigger_workflow',
@@ -203,7 +213,7 @@ describe('E2E：工具 → ConnectionManager → N8nClient → n8n(本地复刻)
 
   it('未配置连接时工具仍然注册，调用时才报可读错误', async () => {
     const { tools } = collectTools(makeConfig({ baseUrl: '', apiKey: '' }))
-    expect(tools.size).toBe(17)
+    expect(tools.size).toBe(21)
     await expect(tools.get('n8n_list_workflows')!.execute({}, {})).rejects.toThrow(/尚未配置 n8n 连接/)
   })
 
@@ -461,5 +471,148 @@ describe('E2E：可视化搭建（n8n_add_nodes / open_editor / validate / 回�
     expect(Array.isArray(stored.nodes)).toBe(true)
     expect(stored.connections).toBeDefined()
     expect(stored.settings).toBeDefined()
+  })
+})
+
+describe('E2E：搭建会话（计划 → 进度 → 暂停生效）', () => {
+  it('声明计划后，add_nodes 的结果会落到对应步骤上', async () => {
+    const { tools, exec } = collectTools(makeConfig())
+    seed('w-sess', 'sess-wf')
+
+    const begun = (await tools.get('n8n_begin_build_session')!.execute(
+      {
+        workflowId: 'w-sess',
+        goal: '收到 POST 返回问候语',
+        steps: [
+          { id: 's1', title: '加 Webhook 触发器' },
+          { id: 's2', title: '加 Code 节点' }
+        ]
+      },
+      exec
+    )) as { ok: boolean; sessionId: string; progress: { total: number; percent: number } }
+    expect(begun.ok).toBe(true)
+    expect(begun.sessionId).toBeTruthy()
+    expect(begun.progress).toMatchObject({ total: 2, percent: 0 })
+
+    await tools.get('n8n_add_nodes')!.execute(
+      { workflowId: 'w-sess', nodes: [node('n1', 'Hook')], stepId: 's1' },
+      exec
+    )
+
+    const got = (await tools.get('n8n_get_build_session')!.execute({ workflowId: 'w-sess' }, exec)) as {
+      ok: boolean
+      session: { steps: Array<{ id: string; status: string; added?: number; verified?: boolean }> }
+      progress: { done: number; percent: number }
+    }
+    expect(got.ok).toBe(true)
+    expect(got.session.steps[0]).toMatchObject({ id: 's1', status: 'done', added: 1, verified: true })
+    expect(got.session.steps[1]?.status).toBe('pending')
+    expect(got.progress.percent).toBe(50)
+  })
+
+  it('暂停期间写操作被拦下，恢复后继续', async () => {
+    const { tools, exec } = collectTools(makeConfig())
+    seed('w-pause', 'pause-wf')
+    const begun = (await tools.get('n8n_begin_build_session')!.execute(
+      { workflowId: 'w-pause', goal: 'g', steps: [{ id: 's1', title: 'step' }] },
+      exec
+    )) as { sessionId: string }
+
+    const paused = (await tools.get('n8n_set_build_session_state')!.execute(
+      { sessionId: begun.sessionId, state: 'paused' },
+      exec
+    )) as { session: { status: string } }
+    expect(paused.session.status).toBe('paused')
+
+    const blocked = (await tools.get('n8n_add_nodes')!.execute(
+      { workflowId: 'w-pause', nodes: [node('x1', 'X')], stepId: 's1' },
+      exec
+    )) as { ok: boolean; blocked?: boolean; error?: string }
+    expect(blocked.ok).toBe(false)
+    expect(blocked.blocked).toBe(true)
+    expect(blocked.error).toContain('暂停')
+    expect((store.get('w-pause')!.nodes as unknown[]).length).toBe(0)
+
+    await tools.get('n8n_set_build_session_state')!.execute(
+      { sessionId: begun.sessionId, state: 'running' },
+      exec
+    )
+    const ok = (await tools.get('n8n_add_nodes')!.execute(
+      { workflowId: 'w-pause', nodes: [node('x1', 'X')], stepId: 's1' },
+      exec
+    )) as { ok: boolean }
+    expect(ok.ok).toBe(true)
+    expect((store.get('w-pause')!.nodes as unknown[]).length).toBe(1)
+  })
+
+  it('取消会话会把未完成的步骤标为 skipped', async () => {
+    const { tools, exec } = collectTools(makeConfig())
+    seed('w-cancel', 'cancel-wf')
+    const begun = (await tools.get('n8n_begin_build_session')!.execute(
+      {
+        workflowId: 'w-cancel',
+        goal: 'g',
+        steps: [
+          { id: 'a', title: 'A' },
+          { id: 'b', title: 'B' }
+        ]
+      },
+      exec
+    )) as { sessionId: string }
+    const out = (await tools.get('n8n_set_build_session_state')!.execute(
+      { sessionId: begun.sessionId, state: 'cancelled', note: '用户终止' },
+      exec
+    )) as { session: { steps: Array<{ status: string }>; status: string } }
+    expect(out.session.status).toBe('cancelled')
+    expect(out.session.steps.every((s) => s.status === 'skipped')).toBe(true)
+  })
+
+  it('查不到会话时返回可读提示而不是抛错', async () => {
+    const { tools, exec } = collectTools(makeConfig())
+    const out = (await tools.get('n8n_get_build_session')!.execute(
+      { workflowId: 'never-started' },
+      exec
+    )) as { ok: boolean; error?: string }
+    expect(out.ok).toBe(false)
+    expect(out.error).toContain('没有找到搭建会话')
+  })
+
+  it('非法的 state 会被拒绝', async () => {
+    const { tools, exec } = collectTools(makeConfig())
+    await expect(
+      tools.get('n8n_set_build_session_state')!.execute({ sessionId: 'x', state: 'bogus' }, exec)
+    ).rejects.toThrow(/state 必须是/)
+  })
+})
+
+describe('E2E：凭据向导', () => {
+  it('n8n_check_credentials 指出缺失的凭据类型与配置入口', async () => {
+    const { tools, exec } = collectTools(makeConfig())
+    seed('w-cred', 'cred-wf', [
+      { id: 'g1', name: '写入表格', type: 'n8n-nodes-base.googleSheets', typeVersion: 4, position: [0, 0], parameters: {} }
+    ])
+    const out = (await tools.get('n8n_check_credentials')!.execute({ workflowId: 'w-cred' }, exec)) as {
+      ok: boolean
+      missing: Array<{ credentialType: string; nodes: string[] }>
+      available: string[]
+      credentialsUrl?: string
+      note: string
+    }
+    expect(out.ok).toBe(false)
+    expect(out.missing.map((m) => m.credentialType)).toContain('googleSheetsOAuth2Api')
+    expect(out.available).toContain('openAiApi')
+    expect(out.credentialsUrl).toContain('/home/credentials')
+    expect(out.note).toContain('不会读取')
+  })
+
+  it('凭据齐全时 ok=true', async () => {
+    const { tools, exec } = collectTools(makeConfig())
+    seed('w-cred2', 'cred-wf2', [
+      { id: 'o1', name: 'LLM', type: 'n8n-nodes-base.openAi', typeVersion: 1, position: [0, 0], parameters: {} }
+    ])
+    const out = (await tools.get('n8n_check_credentials')!.execute({ workflowId: 'w-cred2' }, exec)) as {
+      ok: boolean
+    }
+    expect(out.ok).toBe(true)
   })
 })

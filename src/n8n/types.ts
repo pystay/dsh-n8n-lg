@@ -52,3 +52,21 @@ export interface TriggerResult {
   /** 工作流返回体原样透传（responseMode=lastNode/responseNode 时才有执行结果）。 */
   result?: unknown
 }
+
+/**
+ * 凭据元数据（`GET /api/v1/credentials` 的 data[] 元素）。
+ * n8n 只返回 id/name/type 这类描述信息，**不包含任何密钥**。
+ */
+export interface CredentialSummary {
+  id: string
+  name: string
+  type: string
+  [key: string]: unknown
+}
+
+/** `GET /api/v1/credentials` 响应。 */
+export interface CredentialListResponse {
+  data: CredentialSummary[]
+  nextCursor?: string | null
+  [key: string]: unknown
+}
