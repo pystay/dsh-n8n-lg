@@ -347,23 +347,41 @@ describe('E2E：可视化搭建（n8n_add_nodes / open_editor / validate / 回�
 
   it('AI 连线（非 main 通道）不会被覆盖', async () => {
     const { tools, exec } = collectTools(makeConfig())
-    seed('w-build', 'build-wf', [node('m1', 'Model')])
+    // 真实 n8n 要求连线两端都存在于节点列表中，因此这里把 Agent 也建出来
+    seed('w-build', 'build-wf', [node('m1', 'Model'), node('a1', 'Agent1')])
     store.get('w-build')!.connections = {
-      Model: { ai_languageModel: [[{ node: 'OldAgent', type: 'ai_languageModel', index: 0 }]] }
+      Model: { ai_languageModel: [[{ node: 'Agent1', type: 'ai_languageModel', index: 0 }]] }
     }
-    await tools.get('n8n_add_nodes')!.execute(
+    const out = (await tools.get('n8n_add_nodes')!.execute(
       {
         workflowId: 'w-build',
-        nodes: [node('m2', 'Model2')],
+        nodes: [node('m2', 'Model2'), node('a2', 'Agent2')],
         connections: {
-          Model: { ai_languageModel: [[{ node: 'NewAgent', type: 'ai_languageModel', index: 0 }]] }
+          Model: { ai_languageModel: [[{ node: 'Agent2', type: 'ai_languageModel', index: 0 }]] }
         }
       },
       exec
-    )
+    )) as { ok: boolean }
+    expect(out.ok).toBe(true)
     const conn = store.get('w-build')!.connections as Record<string, Record<string, unknown[][]>>
     const links = conn.Model!.ai_languageModel![0] as Array<{ node: string }>
-    expect(links.map((l) => l.node)).toEqual(['OldAgent', 'NewAgent'])
+    expect(links.map((l) => l.node)).toEqual(['Agent1', 'Agent2'])
+  })
+
+  it('n8n_add_nodes 拒绝指向不存在节点的连线（实测 n8n 会 400）', async () => {
+    const { tools, exec } = collectTools(makeConfig())
+    seed('w-build', 'build-wf', [node('m1', 'Model')])
+    const out = (await tools.get('n8n_add_nodes')!.execute(
+      {
+        workflowId: 'w-build',
+        nodes: [node('m2', 'Model2')],
+        connections: { Model: { ai_languageModel: [[{ node: 'Ghost', type: 'ai_languageModel', index: 0 }]] } }
+      },
+      exec
+    )) as { ok: boolean; issues: Array<{ level: string; message: string }> }
+    expect(out.ok).toBe(false)
+    expect(out.issues.some((i) => i.level === 'error' && i.message.includes('指向不存在的节点'))).toBe(true)
+    expect((store.get('w-build')!.nodes as unknown[]).length).toBe(1)
   })
 
   it('n8n_add_nodes 拒绝编造的节点类型（knownTypes）', async () => {

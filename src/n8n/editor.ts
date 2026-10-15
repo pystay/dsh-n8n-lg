@@ -52,6 +52,8 @@ export interface AddNodesResult {
   issues: NodeIssue[]
   /** 写入后是否读回验证通过。 */
   verified: boolean
+  /** n8n 侧拒绝了写入时的原因（已做本地校验仍被拒的情况）。 */
+  error?: string
 }
 
 export interface UpdateResult {
@@ -61,6 +63,8 @@ export interface UpdateResult {
   snapshotId?: string
   issues: NodeIssue[]
   verified: boolean
+  /** n8n 侧拒绝了写入时的原因。 */
+  error?: string
 }
 
 export interface RestoreResult {
@@ -165,7 +169,12 @@ export function validateWorkflow(
   if (connections && typeof connections === 'object') {
     for (const [source, channels] of Object.entries(conn)) {
       if (!nameSet.has(source)) {
-        issues.push({ node: source, level: 'warning', message: '连线源节点不存在于节点列表中' })
+        // n8n 会以 400 unknown_connection_target 拒绝，因此这里必须是 error（写前拦下）
+        issues.push({
+          node: source,
+          level: 'error',
+          message: '连线源节点不存在于节点列表中（n8n 会以 400 拒绝保存）'
+        })
       }
       if (!channels || typeof channels !== 'object') continue
       for (const [channel, branches] of Object.entries(channels)) {
@@ -177,10 +186,11 @@ export function validateWorkflow(
             if (!target) {
               issues.push({ node: source, level: 'error', message: `通道 ${channel} 存在缺少目标节点的连线` })
             } else if (!nameSet.has(target)) {
+              // 实测：n8n 返回 400 "unknown_connection_target"，属于硬错误而非提示
               issues.push({
                 node: source,
-                level: 'warning',
-                message: `连线指向不存在的节点：${target}（通道 ${channel}）`
+                level: 'error',
+                message: `连线指向不存在的节点：${target}（通道 ${channel}；n8n 会以 400 拒绝保存）`
               })
             }
           }
@@ -231,6 +241,12 @@ function dedupeLinks(links: ConnectionLink[]): ConnectionLink[] {
 /** JSON 深拷贝（避免 structuredClone 的类型/环境差异）。 */
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value ?? {})) as T
+}
+
+/** 把 n8n 的写入失败转成可读的一句话（保留 n8n 自己的原因）。 */
+function describeError(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err)
+  return `n8n 拒绝了这次写入：${message}`
 }
 
 export interface AddNodesInput {
@@ -377,11 +393,26 @@ export class WorkflowEditor {
 
       const snapshot = await this.capture(workflowId, `add_nodes(${fresh.length}) 前的自动快照`)
       // 中间态只存草稿，避免把半成品直接发布上线
-      await this.client.updateWorkflow(
-        workflowId,
-        { name: current.name ?? 'Untitled', nodes, connections, settings: current.settings ?? {} },
-        { publishIfActive: false }
-      )
+      try {
+        await this.client.updateWorkflow(
+          workflowId,
+          { name: current.name ?? 'Untitled', nodes, connections, settings: current.settings ?? {} },
+          { publishIfActive: false }
+        )
+      } catch (err) {
+        // 本地校验通过但 n8n 仍拒绝（例如它自己的结构校验）：返回结构化失败而不是抛异常
+        return {
+          ok: false,
+          workflowId,
+          added: 0,
+          skipped,
+          nodeCount: existing.length,
+          snapshotId: snapshot.id,
+          issues,
+          verified: false,
+          error: describeError(err)
+        }
+      }
 
       const verified = await this.verify(workflowId, fresh)
       if (stepId) this.steps(workflowId).add(stepId)
@@ -421,16 +452,28 @@ export class WorkflowEditor {
       }
 
       const snapshot = await this.capture(workflowId, options.reason ?? 'update 前的自动快照')
-      await this.client.updateWorkflow(
-        workflowId,
-        {
-          name: patch.name ?? current.name ?? 'Untitled',
-          nodes,
-          connections,
-          settings: patch.settings ?? current.settings ?? {}
-        },
-        { publishIfActive: options.publishIfActive ?? false }
-      )
+      try {
+        await this.client.updateWorkflow(
+          workflowId,
+          {
+            name: patch.name ?? current.name ?? 'Untitled',
+            nodes,
+            connections,
+            settings: patch.settings ?? current.settings ?? {}
+          },
+          { publishIfActive: options.publishIfActive ?? false }
+        )
+      } catch (err) {
+        return {
+          ok: false,
+          workflowId,
+          nodeCount: nodes.length,
+          snapshotId: snapshot.id,
+          issues,
+          verified: false,
+          error: describeError(err)
+        }
+      }
 
       return {
         ok: true,

@@ -100,11 +100,20 @@ describe('validateWorkflow', () => {
     expect(issues.some((i) => i.level === 'error' && i.message.includes('不支持该节点类型'))).toBe(true)
   })
 
-  it('连线指向不存在的节点会给出 warning', () => {
+  it('连线指向不存在的节点是 error（实测 n8n 会以 400 unknown_connection_target 拒绝）', () => {
     const issues = validateWorkflow([node('n1', 'A')], {
       A: { main: [[{ node: 'Ghost', type: 'main', index: 0 }]] }
     })
-    expect(issues.some((i) => i.message.includes('指向不存在的节点'))).toBe(true)
+    const hit = issues.find((i) => i.message.includes('指向不存在的节点'))
+    expect(hit?.level).toBe('error')
+  })
+
+  it('连线源节点不存在同样是 error', () => {
+    const issues = validateWorkflow([node('n1', 'A')], {
+      Nope: { main: [[{ node: 'A', type: 'main', index: 0 }]] }
+    })
+    const hit = issues.find((i) => i.message.includes('连线源节点不存在'))
+    expect(hit?.level).toBe('error')
   })
 })
 
@@ -219,6 +228,41 @@ describe('WorkflowEditor.addNodes', () => {
     expect(result.nodeCount).toBe(1)
     expect(result.snapshotId).toBeTruthy()
     expect(editor.listSnapshots('wf-verify').length).toBeGreaterThan(0)
+  })
+
+  it('n8n 侧拒绝写入时返回结构化失败而不是抛异常', async () => {
+    const provider: ClientProvider = {
+      client: () =>
+        ({
+          getWorkflow: async () => ({ name: 'x', nodes: [], connections: {}, settings: {} }),
+          updateWorkflow: async () => {
+            throw new Error('n8n API 400 on /api/v1/workflows/x: {"message":"Workflow structure is invalid"}')
+          }
+        }) as unknown as N8nClient
+    }
+    const editor = new WorkflowEditor(provider)
+    const result = await editor.addNodes({ workflowId: 'wf-reject', nodes: [node('n1', 'A')] })
+    expect(result.ok).toBe(false)
+    expect(result.verified).toBe(false)
+    expect(result.error).toContain('n8n 拒绝了这次写入')
+    expect(result.error).toContain('Workflow structure is invalid')
+  })
+
+  it('没有新节点时不写入、不留快照（重复调用完全无副作用）', async () => {
+    const { provider, writes } = makeProvider({
+      id: 'wf-noop',
+      name: 'wf',
+      nodes: [node('n1', 'A')],
+      connections: {},
+      settings: {}
+    })
+    const editor = new WorkflowEditor(provider)
+    const result = await editor.addNodes({ workflowId: 'wf-noop', nodes: [node('n1', 'A')] })
+    expect(result.ok).toBe(true)
+    expect(result.added).toBe(0)
+    expect(result.snapshotId).toBeUndefined()
+    expect(writes).toHaveLength(0)
+    expect(editor.listSnapshots('wf-noop')).toHaveLength(0)
   })
 })
 
