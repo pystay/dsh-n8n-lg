@@ -3,13 +3,13 @@
  *
  * 依据 n8n 2.44.0 源码（packages/cli/src/public-api/v1/handlers/<resource>/spec/paths）：
  * - 基址 `/api/v1`，鉴权头 `X-N8N-API-KEY`（不是 Bearer）。
- * - 公开 API **没有触发端点**；触发一律 POST 工作流自身的 Webhook：
+ * - 公开 API **没有触发端点**；触发一律请求工作流自身的 Webhook：
  *   生产 `{base}/webhook/{path}`，测试 `{base}/webhook-test/{path}`。
  * - 响应体原样透传，不做字段改名/裁剪。
  *
  * 纯逻辑（仅依赖全局 fetch），不 import DSH 运行时，便于单元/集成测试。
  */
-import { normalizeWebhookPath } from './guard.js'
+import { buildWebhookUrl, normalizeWebhookPath } from './guard.js'
 import type {
   ExecutionResponse,
   ExecutionsListResponse,
@@ -70,6 +70,16 @@ export interface WorkflowBody {
   [key: string]: unknown
 }
 
+/** 触发 Webhook 的可选参数。 */
+export interface TriggerOptions {
+  /** 使用 /webhook-test/ 而非 /webhook/（调试用）。 */
+  test?: boolean
+  /** HTTP 方法，默认 POST。GET/HEAD 不发送请求体。 */
+  method?: string
+  /** 追加到查询串的参数。 */
+  query?: Record<string, string>
+}
+
 /** n8n API 返回非 2xx 时抛出。 */
 export class N8nApiError extends Error {
   constructor(
@@ -83,6 +93,7 @@ export class N8nApiError extends Error {
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000
+const SAFE_METHOD = /^[A-Z]+$/
 
 /** 把布尔值序列化为 n8n 期望的 'true'/'false' 字符串。 */
 function boolParam(value: boolean | undefined): string | undefined {
@@ -111,6 +122,11 @@ export class N8nClient {
     this.fetchImpl = options.fetchImpl ?? fetch
   }
 
+  /** 实例基址（供 UI 拼接编辑器链接）。 */
+  get baseUrl(): string {
+    return this.base
+  }
+
   // ---------------- Workflows ----------------
 
   /** 列出工作流。GET /api/v1/workflows */
@@ -137,9 +153,20 @@ export class N8nClient {
     return this.request<WorkflowSummary>('/api/v1/workflows', { method: 'POST', body })
   }
 
-  /** 更新工作流。PUT /api/v1/workflows/{id} */
-  async updateWorkflow(workflowId: string, body: Partial<WorkflowBody>): Promise<WorkflowSummary> {
-    return this.request<WorkflowSummary>(`/api/v1/workflows/${encodeURIComponent(workflowId)}`, {
+  /**
+   * 更新工作流。PUT /api/v1/workflows/{id}
+   *
+   * `publishIfActive=false` 时，已发布的工作流只保存为草稿，不会自动重新发布
+   * （n8n 默认 true，会让 AI 的中间状态直接上线）。
+   */
+  async updateWorkflow(
+    workflowId: string,
+    body: Partial<WorkflowBody>,
+    options: { publishIfActive?: boolean } = {}
+  ): Promise<WorkflowSummary> {
+    const query =
+      options.publishIfActive === undefined ? '' : `?publishIfActive=${String(options.publishIfActive)}`
+    return this.request<WorkflowSummary>(`/api/v1/workflows/${encodeURIComponent(workflowId)}${query}`, {
       method: 'PUT',
       body
     })
@@ -226,30 +253,42 @@ export class N8nClient {
   // ---------------- Webhook trigger ----------------
 
   /**
-   * 触发工作流：POST 到 Webhook URL。
+   * 触发工作流：请求 Webhook URL。
+   *
    * @param webhookPath Webhook 节点配置的路径（不含前导 /webhook）。
-   * @param payload     JSON 请求体（任意 JSON）。
-   * @param options.test 使用 /webhook-test/ 而非 /webhook/。
+   * @param payload     JSON 请求体（GET/HEAD 时不发送）。
+   * @param options     test / method / query。
    */
   async triggerWebhook(
     webhookPath: string,
     payload: unknown = {},
-    options: { test?: boolean } = {}
+    options: TriggerOptions = {}
   ): Promise<TriggerResult> {
     const prefix = options.test ? 'webhook-test' : 'webhook'
     const path = normalizeWebhookPath(webhookPath)
-    const url = `${this.base}/${prefix}/${path}`
-
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      Accept: 'application/json'
+    let url = buildWebhookUrl(this.base, webhookPath, { test: options.test })
+    if (options.query && Object.keys(options.query).length > 0) {
+      const withQuery = new URL(url)
+      for (const [k, v] of Object.entries(options.query)) withQuery.searchParams.set(k, v)
+      url = withQuery.toString()
     }
+
+    const rawMethod = (options.method ?? 'POST').toUpperCase()
+    const method = SAFE_METHOD.test(rawMethod) ? rawMethod : 'POST'
+    const sendsBody = method !== 'GET' && method !== 'HEAD'
+
+    const headers: Record<string, string> = { Accept: 'application/json' }
     if (this.webhookAuth) headers[this.webhookAuth.header] = this.webhookAuth.value
+    let body: string | undefined
+    if (sendsBody) {
+      headers['Content-Type'] = 'application/json'
+      body = JSON.stringify(payload ?? {})
+    }
 
     const res = await this.fetchImpl(url, {
-      method: 'POST',
+      method,
       headers,
-      body: JSON.stringify(payload ?? {}),
+      body,
       signal: AbortSignal.timeout(this.timeoutMs)
     })
 

@@ -4,17 +4,18 @@
  * 定位：DSH 里的「遥控器」，触发并监控 n8n 工作流，不重造执行引擎。
  * 依据：n8n 2.44.0 公开 API 核验（无触发端点 → 触发走 Webhook）。
  *
- * 三个组成部分：
- *  1. 工具层：12 个 n8n 工具（list/create/trigger/...）。
- *  2. 容器沙箱（可选）：用 Docker 跑 n8n，并注册 `ctx.n8nSandbox` 服务。
- *  3. 玻璃 HUD：客户端 UI 半（lib/client.js）+ node 半注册的 `/api/dsh-n8n-lg/*`
+ * 四个组成部分：
+ *  1. 连接管理：{@link ConnectionManager} —— 全插件唯一的 n8n 连接来源
+ *     （浮窗保存的连接与 AI 工具共享，地址与密钥始终成对）。
+ *  2. 工具层：17 个 n8n 工具，写操作经过 WorkflowEditor（幂等/校验/快照）。
+ *  3. 容器沙箱（可选）：用 Docker 跑 n8n，并注册 `ctx.n8nSandbox` 服务。
+ *  4. 玻璃 HUD：客户端 UI 半（lib/client.js）+ node 半注册的 `/api/dsh-n8n-lg/*`
  *     代理路由（因为 n8n 无 CORS，浏览器不能直连）。
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { Config } from './config.js'
-import { resolveConnection } from './config-resolve.js'
+import { ConnectionManager } from './connection.js'
 import { HUD_ROUTE_PREFIX, registerHudRoutes, type WebServerLike } from './hud/routes.js'
-import { N8nClient } from './n8n/client.js'
 import { DockerSandbox } from './sandbox/docker.js'
 import { registerTools } from './tools/index.js'
 import { registerSandboxTools } from './tools/sandbox.js'
@@ -40,26 +41,16 @@ export function apply(ctx: Context, config: Config): void {
     logger?.[level]?.(`[n8n-lg] ${msg}`)
   }
 
-  // 连接信息：优先 config，其次环境变量；缺失时不阻断加载（HUD 里可再填）。
-  let connection: { baseUrl: string; apiKey: string } | undefined
-  try {
-    connection = resolveConnection(config)
-  } catch (err) {
-    log('warn', `${err instanceof Error ? err.message : String(err)}；工具将不可用，可在 HUD 中配置`)
+  // 连接管理器：唯一的连接来源。未配置也**不阻断加载**——
+  // 工具照常注册（执行时才要求连接），否则用户就没法在浮窗里填地址了。
+  const manager = new ConnectionManager(config)
+  const status = manager.status()
+  if (status.configured) {
+    log('info', `n8n 连接：${status.baseUrl}（来源：${status.source}）`)
+  } else {
+    log('warn', '尚未配置 n8n 连接；工具已注册，可在玻璃浮窗里填写地址与 API Key')
   }
-
-  if (connection) {
-    const client = new N8nClient({
-      baseUrl: connection.baseUrl,
-      apiKey: connection.apiKey,
-      timeoutMs: config.timeoutMs,
-      webhookAuth:
-        config.webhookAuthHeader && config.webhookAuthValue
-          ? { header: config.webhookAuthHeader, value: config.webhookAuthValue }
-          : undefined
-    })
-    registerTools(ctx, client, config, connection.baseUrl)
-  }
+  registerTools(ctx, manager, config)
 
   if (config.sandbox?.enabled) {
     const sandbox = new DockerSandbox({
@@ -68,7 +59,11 @@ export function apply(ctx: Context, config: Config): void {
       hostPort: config.sandbox.hostPort,
       containerPort: config.sandbox.containerPort,
       dataVolume: config.sandbox.dataVolume,
-      timezone: config.sandbox.timezone
+      timezone: config.sandbox.timezone,
+      memoryLimitMb: config.sandbox.memoryLimitMb,
+      cpus: config.sandbox.cpus,
+      pidsLimit: config.sandbox.pidsLimit,
+      noNewPrivileges: config.sandbox.noNewPrivileges
     })
     ctx.provide('n8nSandbox', sandbox)
     registerSandboxTools(ctx, sandbox)
@@ -90,7 +85,7 @@ export function apply(ctx: Context, config: Config): void {
       return
     }
     const child = target as { effect?: (cb: () => unknown, label?: string) => unknown }
-    const dispose = registerHudRoutes(ws, { getConfig: () => config })
+    const dispose = registerHudRoutes(ws, { manager })
     if (typeof child.effect === 'function') child.effect(() => dispose, 'dsh-n8n-lg: hud routes')
     log('info', `HUD 代理路由已注册：${HUD_ROUTE_PREFIX}/*`)
   }

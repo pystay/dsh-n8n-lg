@@ -9,7 +9,8 @@
  *  - 零依赖、不 import 任何 @deepseek-ai/*，纯 DOM + 原生 fetch。
  *  - 内嵌编辑器：n8n 未设 X-Frame-Options，故用 <iframe> 直接嵌（桌面端 webviewTag=false，
  *    且 window.open 会被桌面端转交系统浏览器打开）。
- *  - 生命周期交给 ctx.effect：卸载 / HMR 时自动销毁窗口与定时器。
+ *  - 生命周期交给 ctx.effect：卸载 / HMR 时自动销毁窗口、定时器与在途请求。
+ *  - 观看模式 vs 手动编辑：关闭「自动刷新」后不再强制重载，避免打断用户正在改的内容。
  */
 
 var inject = []
@@ -22,7 +23,7 @@ var CSS = [
   '.dshn8n-orb{width:54px;height:54px;border-radius:50%;border:1px solid rgba(255,255,255,.22);cursor:pointer;color:#eaf0ff;font-weight:700;font-size:13px;letter-spacing:.5px;background:radial-gradient(120% 120% at 30% 20%,rgba(120,160,255,.45),rgba(30,40,70,.55));backdrop-filter:blur(14px) saturate(150%);-webkit-backdrop-filter:blur(14px) saturate(150%);box-shadow:0 8px 30px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.25);transition:transform .15s ease;}',
   '.dshn8n-orb:hover{transform:translateY(-2px) scale(1.04);}',
   '.dshn8n-orb .dshn8n-dot{position:absolute;top:6px;right:6px;}',
-  '.dshn8n-panel{width:352px;max-height:78vh;display:flex;flex-direction:column;border-radius:16px;overflow:hidden;border:1px solid rgba(255,255,255,.16);background:linear-gradient(160deg,rgba(24,28,44,.72),rgba(14,16,28,.66));backdrop-filter:blur(20px) saturate(160%);-webkit-backdrop-filter:blur(20px) saturate(160%);box-shadow:0 18px 50px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.14);transition:width .18s ease;}',
+  '.dshn8n-panel{width:352px;max-width:calc(100vw - 24px);max-height:78vh;display:flex;flex-direction:column;border-radius:16px;overflow:hidden;border:1px solid rgba(255,255,255,.16);background:linear-gradient(160deg,rgba(24,28,44,.72),rgba(14,16,28,.66));backdrop-filter:blur(20px) saturate(160%);-webkit-backdrop-filter:blur(20px) saturate(160%);box-shadow:0 18px 50px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.14);transition:width .18s ease;}',
   '.dshn8n-panel.wide{width:min(920px,92vw);}',
   '.dshn8n-head{display:flex;align-items:center;gap:8px;padding:11px 12px;border-bottom:1px solid rgba(255,255,255,.1);}',
   '.dshn8n-title{font-weight:700;font-size:13px;flex:1;display:flex;align-items:center;gap:7px;}',
@@ -32,6 +33,7 @@ var CSS = [
   '.dshn8n-dot.wait{background:#ffc247;color:#ffc247;}',
   '.dshn8n-btn{border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.06);color:#e9edf7;border-radius:9px;padding:5px 9px;font-size:12px;cursor:pointer;transition:background .15s;}',
   '.dshn8n-btn:hover{background:rgba(255,255,255,.14);}',
+  '.dshn8n-btn:disabled{opacity:.45;cursor:not-allowed;}',
   '.dshn8n-btn.primary{background:linear-gradient(135deg,rgba(96,140,255,.85),rgba(64,96,200,.85));border-color:rgba(140,175,255,.5);}',
   '.dshn8n-btn.on{background:rgba(61,220,132,.18);border-color:rgba(61,220,132,.5);color:#8ef0bb;}',
   '.dshn8n-body{overflow:auto;padding:10px 12px 14px;}',
@@ -40,7 +42,8 @@ var CSS = [
   '.dshn8n-row{display:flex;align-items:center;gap:6px;margin-bottom:6px;}',
   '.dshn8n-row input{flex:1;min-width:0;border-radius:9px;border:1px solid rgba(255,255,255,.16);background:rgba(10,12,22,.55);color:#e9edf7;padding:6px 9px;font-size:12px;outline:none;}',
   '.dshn8n-row input:focus{border-color:rgba(120,160,255,.7);}',
-  '.dshn8n-item{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:11px;background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.07);margin-bottom:6px;}',
+  '.dshn8n-payload{width:100%;min-height:46px;resize:vertical;border-radius:9px;border:1px solid rgba(255,255,255,.16);background:rgba(10,12,22,.55);color:#e9edf7;padding:6px 9px;font-size:12px;font-family:ui-monospace,Consolas,monospace;outline:none;box-sizing:border-box;}',
+  '.dshn8n-item{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:7px 9px;border-radius:11px;background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.07);margin-bottom:6px;}',
   '.dshn8n-item .nm{flex:1;min-width:0;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
   '.dshn8n-tag{font-size:10.5px;padding:2px 7px;border-radius:999px;border:1px solid rgba(255,255,255,.16);color:#c7d0e6;}',
   '.dshn8n-tag.on{color:#3ddc84;border-color:rgba(61,220,132,.5);}',
@@ -52,7 +55,9 @@ var CSS = [
   '.dshn8n-st.canceled,.dshn8n-st.unknown{background:rgba(255,255,255,.1);color:#c7d0e6;}',
   '.dshn8n-empty{font-size:12px;color:#8a93a6;padding:4px 2px;}',
   '.dshn8n-msg{font-size:11.5px;color:#ffc247;margin:2px 0 4px;}',
+  '.dshn8n-exmsg{font-size:11.5px;color:#ff8093;margin:2px 0 4px;display:none;}',
   '.dshn8n-time{font-size:10.5px;color:#8a93a6;}',
+  '.dshn8n-conninfo{font-size:11px;color:#8a93a6;margin:2px 0 6px;word-break:break-all;}',
   '.dshn8n-editor{display:flex;flex-direction:column;border-bottom:1px solid rgba(255,255,255,.1);}',
   '.dshn8n-editor-bar{display:flex;align-items:center;gap:6px;padding:8px 12px;}',
   '.dshn8n-editor-bar .t{flex:1;font-size:12px;color:#c7d0e6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
@@ -97,61 +102,51 @@ function createHud() {
   var state = {
     collapsed: false,
     loading: false,
+    focusLoading: false,
     timer: null,
+    frameTimer: null,
+    msgTimer: null,
     focusRev: 0,
+    configured: null,
     editor: { open: false, workflowId: null, autoReload: true, lastStamp: '' },
   }
 
   var statusDot = el('span', { class: 'dshn8n-dot wait' })
   var msgLine = el('div', { class: 'dshn8n-msg', style: 'display:none' })
+  var exMsg = el('div', { class: 'dshn8n-exmsg' })
+  var connInfo = el('div', { class: 'dshn8n-conninfo', text: '连接：读取中…' })
 
-  var baseInput = el('input', { type: 'text', placeholder: 'http://127.0.0.1:5678' })
-  var keyInput = el('input', { type: 'password', placeholder: 'n8n API Key' })
+  var baseInput = el('input', { type: 'text', placeholder: 'http://127.0.0.1:5678', 'aria-label': 'n8n 地址' })
+  var keyInput = el('input', { type: 'password', placeholder: 'n8n API Key', 'aria-label': 'n8n API Key' })
   baseInput.value = cfg.baseUrl
   keyInput.value = cfg.apiKey
+
+  var payloadInput = el('textarea', {
+    class: 'dshn8n-payload',
+    placeholder: '触发 body（JSON），例如 {"name":"world"}',
+    'aria-label': '触发 body（JSON）',
+  })
+  payloadInput.value = '{}'
 
   var wfList = el('div')
   var exList = el('div')
 
-  var saveBtn = el('button', {
-    class: 'dshn8n-btn primary',
-    text: '保存',
-    onclick: function () {
-      NS.saveConfig({ baseUrl: baseInput.value.trim(), apiKey: keyInput.value.trim() })
-      flash('已保存')
-      refresh()
-    },
-  })
-
-  var refreshBtn = el('button', { class: 'dshn8n-btn', text: '刷新', onclick: function () { refresh() } })
-  var collapseBtn = el('button', { class: 'dshn8n-btn', text: '—', onclick: function () { setCollapsed(true) } })
+  var saveBtn = el('button', { class: 'dshn8n-btn primary', text: '保存' })
+  var refreshBtn = el('button', { class: 'dshn8n-btn', text: '刷新' })
+  var collapseBtn = el('button', { class: 'dshn8n-btn', text: '—', title: '收起为玻璃球' })
 
   // ---- 内嵌编辑器 ----
   var editorTitle = el('span', { class: 't', text: '' })
-  var frame = el('iframe', { class: 'dshn8n-frame', src: 'about:blank' })
-  var autoBtn = el('button', {
-    class: 'dshn8n-btn on',
-    text: '自动刷新',
-    onclick: function () {
-      state.editor.autoReload = !state.editor.autoReload
-      autoBtn.className = 'dshn8n-btn' + (state.editor.autoReload ? ' on' : '')
-    },
-  })
-  var openExternalBtn = el('button', {
-    class: 'dshn8n-btn',
-    text: '在系统浏览器打开',
-    onclick: function () {
-      /* 桌面端主窗口会把这个 http 链接转交系统浏览器打开 */
-      globalThis.open(editorUrl(state.editor.workflowId), '_blank')
-    },
-  })
-  var closeEditorBtn = el('button', { class: 'dshn8n-btn', text: '关闭', onclick: function () { closeEditor() } })
+  var frame = el('iframe', { class: 'dshn8n-frame', src: 'about:blank', title: 'n8n 编辑器' })
+  var autoBtn = el('button', { class: 'dshn8n-btn on', text: '自动刷新' })
+  var openExternalBtn = el('button', { class: 'dshn8n-btn', text: '在系统浏览器打开' })
+  var closeEditorBtn = el('button', { class: 'dshn8n-btn', text: '关闭' })
   var editorSection = el('div', { class: 'dshn8n-editor', style: 'display:none' }, [
     el('div', { class: 'dshn8n-editor-bar' }, [editorTitle, autoBtn, openExternalBtn, closeEditorBtn]),
     frame,
     el('div', {
       class: 'dshn8n-hint',
-      text: '编辑器直接嵌入 n8n 页面；AI 每保存一次会自动刷新，方便你看它一步步长出来。',
+      text: '编辑器直接嵌入 n8n 页面；AI 每保存一次会自动刷新。要自己改就先关掉「自动刷新」，避免打断编辑。',
     }),
   ])
 
@@ -166,15 +161,20 @@ function createHud() {
       msgLine,
       el('div', { class: 'dshn8n-sec' }, [
         el('h4', { text: '连接' }),
+        connInfo,
         el('div', { class: 'dshn8n-row' }, [baseInput]),
         el('div', { class: 'dshn8n-row' }, [keyInput, saveBtn]),
       ]),
+      el('div', { class: 'dshn8n-sec' }, [
+        el('h4', { text: '触发 body（JSON）' }),
+        payloadInput,
+      ]),
       el('div', { class: 'dshn8n-sec' }, [el('h4', { text: '工作流' }), wfList]),
-      el('div', { class: 'dshn8n-sec' }, [el('h4', { text: '最近执行' }), exList]),
+      el('div', { class: 'dshn8n-sec' }, [el('h4', { text: '最近执行' }), exMsg, exList]),
     ]),
   ])
 
-  var orb = el('button', { class: 'dshn8n-orb', text: 'n8n', onclick: function () { setCollapsed(false) } })
+  var orb = el('button', { class: 'dshn8n-orb', text: 'n8n', title: '打开 n8n 监控' })
   orb.appendChild(el('span', { class: 'dshn8n-dot wait' }))
   orb.style.display = 'none'
 
@@ -183,6 +183,7 @@ function createHud() {
 
   function editorUrl(id) {
     var base = (NS.loadConfig().baseUrl || '').replace(/\/+$/, '')
+    if (!base) return 'about:blank'
     return id ? base + '/workflow/' + encodeURIComponent(id) : base + '/home/workflows'
   }
 
@@ -201,24 +202,54 @@ function createHud() {
   function flash(text) {
     msgLine.textContent = text
     msgLine.style.display = text ? 'block' : 'none'
-    if (text) setTimeout(function () { msgLine.style.display = 'none' }, 3200)
+    if (state.msgTimer) clearTimeout(state.msgTimer)
+    if (text) {
+      state.msgTimer = setTimeout(function () {
+        msgLine.style.display = 'none'
+      }, 6000)
+    }
+  }
+
+  function setBusy(btn, busy) {
+    if (btn) btn.disabled = Boolean(busy)
   }
 
   function loadFrame() {
     var url = editorUrl(state.editor.workflowId)
     editorTitle.textContent = '编辑器 · ' + (state.editor.workflowId || '全部工作流')
-    /* 先置空再赋值，确保重复打开同一 URL 也会真正重新加载 */
+    if (state.frameTimer) {
+      clearTimeout(state.frameTimer)
+      state.frameTimer = null
+    }
     frame.setAttribute('src', 'about:blank')
-    setTimeout(function () { frame.setAttribute('src', url) }, 60)
+    /* 先置空再赋值，确保重复打开同一 URL 也会真正重新加载 */
+    state.frameTimer = setTimeout(function () {
+      state.frameTimer = null
+      if (!state.editor.open) return
+      frame.setAttribute('src', url)
+    }, 60)
   }
 
+  /**
+   * 打开编辑器。
+   * - 一定会把浮窗展开（AI 说「打开编辑器」时用户可能刚收起面板）；
+   * - workflowId 为 null 表示打开工作流列表；
+   * - 同一目标 + 关闭自动刷新时不重载，避免打断手动编辑。
+   */
   function openEditor(workflowId, note) {
+    var target = workflowId || null
+    var sameTarget = state.editor.open && state.editor.workflowId === target
     state.editor.open = true
-    state.editor.workflowId = workflowId || null
-    state.editor.lastStamp = ''
+    state.editor.workflowId = target
     editorSection.style.display = 'flex'
     panel.classList.add('wide')
-    loadFrame()
+    setCollapsed(false)
+    if (!sameTarget) {
+      state.editor.lastStamp = ''
+      loadFrame()
+    } else {
+      editorTitle.textContent = '编辑器 · ' + (target || '全部工作流')
+    }
     if (note) flash(note)
   }
 
@@ -227,7 +258,21 @@ function createHud() {
     state.editor.workflowId = null
     editorSection.style.display = 'none'
     panel.classList.remove('wide')
+    if (state.frameTimer) {
+      clearTimeout(state.frameTimer)
+      state.frameTimer = null
+    }
     frame.setAttribute('src', 'about:blank')
+  }
+
+  function renderConn(info) {
+    if (!info || info.configured === false) {
+      connInfo.textContent = '连接：未配置（填好地址与 API Key 后点「保存」）'
+      return
+    }
+    var src = info.source || 'config'
+    var label = { runtime: '浮窗设置', config: '插件配置', env: '环境变量', sandbox: '沙箱' }[src] || src
+    connInfo.textContent = '连接：' + (info.baseUrl || '') + '（来源：' + label + '）'
   }
 
   function renderWorkflows(list) {
@@ -237,60 +282,120 @@ function createHud() {
       return
     }
     list.forEach(function (w) {
-      var tag = el('span', { class: 'dshn8n-tag ' + (w.active ? 'on' : 'off'), text: w.active ? '已启用' : '未启用' })
-      var editBtn = el('button', {
-        class: 'dshn8n-btn',
-        text: '编辑',
-        onclick: function () { openEditor(w.id, '已打开编辑器') },
+      var tag = el('span', {
+        class: 'dshn8n-tag ' + (w.active ? 'on' : 'off'),
+        text: w.active ? '已启用' : '未启用',
       })
-      var toggle = el('button', {
-        class: 'dshn8n-btn',
-        text: w.active ? '停用' : '启用',
-        onclick: function () {
-          var act = w.active ? 'deactivate' : 'activate'
-          flash(act === 'activate' ? '启用中…' : '停用中…')
-          NS.api('/workflows/' + encodeURIComponent(w.id) + '/' + act, { method: 'POST' })
-            .then(function (r) {
-              if (r && r.ok) flash(act === 'activate' ? '已启用' : '已停用')
-              else flash('操作失败：' + ((r && r.error) || '未知错误'))
-              refresh()
-            })
-            .catch(function (e) { flash('操作失败：' + e.message) })
-        },
-      })
+      var editBtn = el('button', { class: 'dshn8n-btn', text: '编辑' })
+      var toggle = el('button', { class: 'dshn8n-btn', text: w.active ? '停用' : '启用' })
+      var snapBtn = el('button', { class: 'dshn8n-btn', text: '快照' })
+      var restoreBtn = el('button', { class: 'dshn8n-btn', text: '回滚' })
+
       var row = el('div', { class: 'dshn8n-item' }, [
         el('span', { class: 'nm', text: w.name || w.id }),
         tag,
         editBtn,
         toggle,
+        snapBtn,
+        restoreBtn,
       ])
-      ;(w.webhookPaths || []).forEach(function (p) {
-        row.appendChild(
-          el('button', {
-            class: 'dshn8n-btn primary',
-            text: '触发',
-            onclick: function () {
-              if (!w.active) {
-                flash('该工作流未激活：生产 Webhook 只在激活后存在，请先点「启用」')
-                return
-              }
-              flash('触发中…')
-              NS.api('/trigger', { method: 'POST', body: { webhookPath: p, payload: {} } })
-                .then(function (r) {
-                  if (r && r.ok) {
-                    var res = r.result
-                    var execId = res && typeof res === 'object' ? res.executionId : undefined
-                    flash('已触发 ' + p + (execId ? '（执行 #' + execId + '）' : ''))
-                  } else {
-                    flash('触发失败：' + ((r && r.error) || '未知错误'))
-                  }
-                  refresh()
-                })
-                .catch(function (e) { flash('触发失败：' + e.message) })
-            },
+
+      editBtn.onclick = function () {
+        openEditor(w.id, '已打开编辑器')
+      }
+
+      toggle.onclick = function () {
+        var act = w.active ? 'deactivate' : 'activate'
+        setBusy(toggle, true)
+        flash(act === 'activate' ? '启用中…' : '停用中…')
+        NS.api('/workflows/' + encodeURIComponent(w.id) + '/' + act, { method: 'POST' })
+          .then(function (r) {
+            setBusy(toggle, false)
+            if (r && r.ok) flash(act === 'activate' ? '已启用' : '已停用')
+            else flash('操作失败：' + ((r && r.error) || '未知错误'))
+            refresh()
           })
-        )
+          .catch(function (e) {
+            setBusy(toggle, false)
+            flash('操作失败：' + e.message)
+          })
+      }
+
+      snapBtn.onclick = function () {
+        setBusy(snapBtn, true)
+        NS.api('/workflows/' + encodeURIComponent(w.id) + '/snapshots', { method: 'POST' })
+          .then(function (r) {
+            setBusy(snapBtn, false)
+            if (r && r.ok) flash('已记录快照 ' + r.snapshotId)
+            else flash('快照失败：' + ((r && r.error) || '未知错误'))
+          })
+          .catch(function (e) {
+            setBusy(snapBtn, false)
+            flash('快照失败：' + e.message)
+          })
+      }
+
+      restoreBtn.onclick = function () {
+        setBusy(restoreBtn, true)
+        flash('回滚中…')
+        NS.api('/workflows/' + encodeURIComponent(w.id) + '/restore', { method: 'POST', body: {} })
+          .then(function (r) {
+            setBusy(restoreBtn, false)
+            if (r && r.ok) flash('已回滚到快照 ' + r.restoredFrom)
+            else flash('回滚失败：' + ((r && r.error) || '未知错误'))
+            refresh()
+          })
+          .catch(function (e) {
+            setBusy(restoreBtn, false)
+            flash('回滚失败：' + e.message)
+          })
+      }
+
+      ;(w.webhooks || []).forEach(function (wh) {
+        var path = wh && wh.path
+        if (!path) return
+        var triggerBtn = el('button', { class: 'dshn8n-btn primary', text: '触发' })
+        triggerBtn.onclick = function () {
+          if (!w.active) {
+            flash('该工作流未激活：生产 Webhook 只在激活后存在，请先点「启用」')
+            return
+          }
+          var payload
+          try {
+            payload = JSON.parse(payloadInput.value || '{}')
+          } catch (e) {
+            flash('触发 body 不是合法 JSON')
+            return
+          }
+          setBusy(triggerBtn, true)
+          flash('触发中…')
+          NS.api('/trigger', {
+            method: 'POST',
+            body: { webhookPath: path, payload: payload, method: (wh && wh.method) || 'POST' },
+          })
+            .then(function (r) {
+              setBusy(triggerBtn, false)
+              if (r && r.ok) {
+                var inner = r.result && r.result.result
+                var execId = (inner && inner.executionId) || (r.result && r.result.executionId)
+                flash(
+                  '已触发 ' +
+                    path +
+                    (execId ? '（执行 #' + execId + '）' : '（已接收；该 Webhook 未返回执行 ID）')
+                )
+              } else {
+                flash('触发失败：' + ((r && r.error) || '未知错误'))
+              }
+              refresh()
+            })
+            .catch(function (e) {
+              setBusy(triggerBtn, false)
+              flash('触发失败：' + e.message)
+            })
+        }
+        row.appendChild(triggerBtn)
       })
+
       wfList.appendChild(row)
     })
   }
@@ -314,15 +419,40 @@ function createHud() {
 
   /** 拉取 AI 的"聚焦"指令：有新 rev 就自动打开对应工作流的编辑器。 */
   function pollFocus() {
+    if (state.focusLoading) return
+    state.focusLoading = true
     NS.api('/focus')
       .then(function (r) {
         if (!r || !r.ok) return
-        if (typeof r.rev === 'number' && r.rev !== state.focusRev) {
+        if (typeof r.rev === 'number' && r.rev > state.focusRev) {
           state.focusRev = r.rev
-          if (r.workflowId) openEditor(r.workflowId, r.note || 'AI 正在搭建，编辑器已自动打开')
+          openEditor(r.workflowId || null, r.note || 'AI 正在搭建，编辑器已自动打开')
         }
       })
-      .catch(function () {})
+      .catch(function () {
+        /* 聚焦是锦上添花，失败静默 */
+      })
+      .then(function () {
+        state.focusLoading = false
+      })
+  }
+
+  /** 编辑器打开时：目标工作流一变（AI 保存了新节点）就自动刷新 iframe。 */
+  function autoReloadIfChanged(list) {
+    if (!state.editor.open || !state.editor.autoReload) return
+    var id = state.editor.workflowId
+    if (!id) return
+    var cur = null
+    for (var i = 0; i < list.length; i += 1) {
+      if (list[i].id === id) {
+        cur = list[i]
+        break
+      }
+    }
+    if (!cur) return
+    var stamp = String(cur.updatedAt || '') + ':' + String(cur.nodeCount || '')
+    if (state.editor.lastStamp && state.editor.lastStamp !== stamp) loadFrame()
+    state.editor.lastStamp = stamp
   }
 
   function refresh() {
@@ -330,36 +460,37 @@ function createHud() {
     state.loading = true
     setStatus('wait')
     NS.api('/health')
-      .then(function () {
+      .then(function (h) {
+        renderConn(h)
+        state.configured = Boolean(h && h.ok === true && h.configured !== false)
+        if (!state.configured) {
+          setStatus('wait')
+          flash('尚未连接 n8n：填好地址与 API Key 后点「保存」')
+          wfList.textContent = ''
+          exList.textContent = ''
+          return null
+        }
         return Promise.all([NS.api('/workflows'), NS.api('/executions?limit=8')])
       })
       .then(function (r) {
+        if (!r) return
         var wf = r[0]
         var ex = r[1]
-        if (wf && wf.ok === false && wf.configured === false) {
-          setStatus('wait')
-          flash(wf.error || '请先填写 n8n 地址与 API Key')
-          wfList.textContent = ''
-          exList.textContent = ''
-          return
-        }
         if (wf && wf.ok) {
           setStatus('ok')
           renderWorkflows(wf.data)
-          // 编辑器打开时：目标工作流一变（AI 保存了新节点）就自动刷新 iframe
-          if (state.editor.open && state.editor.autoReload) {
-            var cur = (wf.data || []).filter(function (w) { return w.id === state.editor.workflowId })[0]
-            if (cur) {
-              var stamp = String(cur.updatedAt || '') + ':' + String(cur.nodeCount || '')
-              if (state.editor.lastStamp && state.editor.lastStamp !== stamp) loadFrame()
-              state.editor.lastStamp = stamp
-            }
-          }
+          autoReloadIfChanged(wf.data || [])
         } else {
           setStatus('err')
           flash((wf && wf.error) || 'n8n 连接失败')
         }
-        if (ex && ex.ok) renderExecutions(ex.data)
+        if (ex && ex.ok) {
+          exMsg.style.display = 'none'
+          renderExecutions(ex.data)
+        } else {
+          exMsg.textContent = '执行列表获取失败：' + ((ex && ex.error) || '未知错误')
+          exMsg.style.display = 'block'
+        }
       })
       .catch(function (e) {
         setStatus('err')
@@ -370,7 +501,80 @@ function createHud() {
       })
   }
 
-  refresh()
+  // ---- 事件绑定 ----
+
+  saveBtn.onclick = function () {
+    var next = {
+      baseUrl: baseInput.value.trim() || NS.DEFAULT_BASE_URL,
+      apiKey: keyInput.value.trim(),
+    }
+    if (!next.apiKey) {
+      flash('请填写 n8n API Key')
+      return
+    }
+    setBusy(saveBtn, true)
+    var localSaved = NS.saveConfig(next)
+    NS.pushConfig(next)
+      .then(function (r) {
+        setBusy(saveBtn, false)
+        if (r && r.ok) {
+          flash(localSaved ? '已保存并生效' : '已保存到宿主（浏览器本地存储不可用，下次需重填）')
+          renderConn(r)
+        } else {
+          flash('保存失败：' + ((r && r.error) || '未知错误'))
+        }
+        refresh()
+      })
+      .catch(function (e) {
+        setBusy(saveBtn, false)
+        flash('保存失败：' + e.message)
+      })
+  }
+
+  refreshBtn.onclick = function () {
+    refresh()
+  }
+
+  collapseBtn.onclick = function () {
+    setCollapsed(true)
+  }
+
+  orb.onclick = function () {
+    setCollapsed(false)
+  }
+
+  autoBtn.onclick = function () {
+    state.editor.autoReload = !state.editor.autoReload
+    autoBtn.className = 'dshn8n-btn' + (state.editor.autoReload ? ' on' : '')
+    autoBtn.textContent = state.editor.autoReload ? '自动刷新' : '自动刷新已关'
+    flash(state.editor.autoReload ? '已开启自动刷新' : '已关闭自动刷新（自己改时更安全）')
+  }
+
+  openExternalBtn.onclick = function () {
+    /* 桌面端主窗口会把这个 http 链接转交系统浏览器打开 */
+    globalThis.open(editorUrl(state.editor.workflowId), '_blank')
+  }
+
+  closeEditorBtn.onclick = function () {
+    closeEditor()
+  }
+
+  // ---- 启动 ----
+
+  setCollapsed(false)
+  if (cfg.apiKey) {
+    // 本地有配置：交给宿主，让 AI 工具与浮窗指向同一实例
+    NS.pushConfig(cfg)
+      .then(function (r) {
+        if (r && r.ok) renderConn(r)
+        refresh()
+      })
+      .catch(function () {
+        refresh()
+      })
+  } else {
+    refresh()
+  }
   pollFocus()
   state.timer = setInterval(function () {
     refresh()
@@ -380,6 +584,9 @@ function createHud() {
   return {
     destroy: function () {
       if (state.timer) clearInterval(state.timer)
+      if (state.frameTimer) clearTimeout(state.frameTimer)
+      if (state.msgTimer) clearTimeout(state.msgTimer)
+      state.editor.open = false
       root.remove()
       var style = document.getElementById(STYLE_ID)
       if (style) style.remove()
@@ -395,7 +602,9 @@ function apply(ctx) {
   try {
     ctx.effect(function () {
       var hud = createHud()
-      return function () { hud.destroy() }
+      return function () {
+        hud.destroy()
+      }
     }, 'dsh-n8n-lg: glass HUD')
     ctx.logger && ctx.logger.info && ctx.logger.info('[dsh-n8n-lg] 玻璃 HUD 已挂载')
   } catch (error) {

@@ -5,13 +5,15 @@
  * 因此由本插件的 node 半在 DSH 的 webServer 上注册一个前缀路由
  * `/api/dsh-n8n-lg/*`，同源请求即可，服务端再去访问 n8n。
  *
- * 连接信息（baseUrl / apiKey）优先取请求头（浏览器 UI 里用户填的），
- * 回退到插件 cordis 配置。
+ * 连接信息**只有一份来源**（{@link ConnectionManager}）：浮窗保存的连接会写进
+ * 运行时覆盖，AI 工具与浮窗因此永远指向同一个 n8n 实例。
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { N8nApiError, N8nClient } from '../n8n/client.js'
+import type { ConnectionManager } from '../connection.js'
+import { normalizeBaseUrl } from '../connection.js'
+import { N8nApiError } from '../n8n/client.js'
+import { WorkflowEditor, validateWorkflow } from '../n8n/editor.js'
 import { isWebhookPathAllowed } from '../n8n/guard.js'
-import type { Config } from '../config.js'
 
 /** webServer 服务的最小结构（避免依赖 dsh-host-webserver 的类型包）。 */
 export interface WebServerLike {
@@ -24,6 +26,9 @@ export interface WebServerLike {
 
 export const HUD_ROUTE_PREFIX = '/api/dsh-n8n-lg'
 
+/** 请求体上限：HUD 只会发小 JSON，超出的直接拒绝。 */
+const MAX_BODY_BYTES = 256 * 1024
+
 /** HUD 当前"聚焦"的工作流（AI 搭建时用它让浮窗自动打开内嵌编辑器）。 */
 export interface HudFocus {
   workflowId: string | null
@@ -34,7 +39,7 @@ export interface HudFocus {
 }
 
 export interface HudDeps {
-  getConfig: () => Config
+  manager: ConnectionManager
 }
 
 /**
@@ -57,15 +62,17 @@ function nodeCountOf(w: unknown): number {
 }
 
 /** 从节点列表里提取 Webhook 路径（用于 UI 的"快速触发"按钮）。 */
-function extractWebhookPaths(nodes: unknown): string[] {
+function extractWebhooks(nodes: unknown): Array<{ path: string; method: string }> {
   if (!Array.isArray(nodes)) return []
-  const out: string[] = []
+  const out: Array<{ path: string; method: string }> = []
   for (const node of nodes) {
     if (!node || typeof node !== 'object') continue
-    const n = node as { type?: unknown; parameters?: { path?: unknown } }
-    if (n.type === 'n8n-nodes-base.webhook' && typeof n.parameters?.path === 'string' && n.parameters.path) {
-      out.push(n.parameters.path)
-    }
+    const n = node as { type?: unknown; parameters?: { path?: unknown; httpMethod?: unknown } }
+    if (n.type !== 'n8n-nodes-base.webhook') continue
+    const path = typeof n.parameters?.path === 'string' ? n.parameters.path : ''
+    if (!path) continue
+    const method = typeof n.parameters?.httpMethod === 'string' ? n.parameters.httpMethod.toUpperCase() : 'POST'
+    out.push({ path, method })
   }
   return out
 }
@@ -76,66 +83,121 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(text)
 }
 
+/** 读取请求体；超过上限时中断连接并抛出可识别错误。 */
 function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve) => {
-    let data = ''
-    req.on('data', (c) => (data += c))
-    req.on('end', () => resolve(data))
+  return new Promise((resolve, reject) => {
+    let size = 0
+    const chunks: Buffer[] = []
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length
+      if (size > MAX_BODY_BYTES) {
+        reject(new Error('请求体过大'))
+        req.destroy()
+        return
+      }
+      chunks.push(chunk)
+    })
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+    req.on('error', (err) => reject(err))
   })
 }
 
-/** 解析本次请求使用的连接信息：请求头优先，其次插件配置。 */
-function resolveConn(req: IncomingMessage, config: Config) {
-  const header = (name: string): string | undefined => {
-    const v = req.headers[name]
-    return typeof v === 'string' && v.trim() ? v.trim() : undefined
+/** 解析 JSON 请求体；非法 JSON 抛错（由外层统一转成 400）。 */
+async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const raw = await readBody(req)
+  if (!raw.trim()) return {}
+  const parsed = JSON.parse(raw) as unknown
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('请求体必须是 JSON 对象')
   }
-  const baseUrl = header('x-n8n-base-url') ?? config.baseUrl ?? ''
-  const apiKey = header('x-n8n-api-key') ?? config.apiKey ?? ''
-  return { baseUrl, apiKey }
+  return parsed as Record<string, unknown>
 }
 
 /**
  * 注册 HUD 路由；返回 disposer（插件卸载时移除路由）。
  */
 export function registerHudRoutes(webServer: WebServerLike, deps: HudDeps): () => void {
+  const { manager } = deps
+  const editor = new WorkflowEditor(manager)
+
   return webServer.register({
     kind: 'prefix',
     path: HUD_ROUTE_PREFIX,
     handler: async (req, res) => {
       const url = new URL(req.url ?? '/', 'http://localhost')
       const sub = url.pathname.slice(HUD_ROUTE_PREFIX.length) || '/'
-      const config = deps.getConfig()
-      const { baseUrl, apiKey } = resolveConn(req, config)
-
-      // 健康检查：不依赖连接信息，始终可用
-      if (sub === '/health') {
-        return sendJson(res, 200, { ok: true, configured: Boolean(baseUrl && apiKey), baseUrl })
-      }
-
-      // 聚焦状态：让浮窗自动打开某个工作流的内嵌编辑器（无需 n8n 连接）
-      if (sub === '/focus' && req.method === 'GET') {
-        return sendJson(res, 200, { ok: true, ...hudFocus })
-      }
-      if (sub === '/focus' && req.method === 'POST') {
-        const body = JSON.parse((await readBody(req)) || '{}') as {
-          workflowId?: string | null
-          note?: string
-        }
-        return sendJson(res, 200, { ok: true, ...setHudFocus(body.workflowId ?? null, body.note) })
-      }
-
-      // 未配置连接信息：明确告知 UI（不抛 500）
-      if (!baseUrl || !apiKey) {
-        return sendJson(res, 200, { ok: false, configured: false, error: '尚未配置 n8n 地址或 API Key' })
-      }
-
-      const client = new N8nClient({ baseUrl, apiKey, timeoutMs: config.timeoutMs })
 
       try {
-        // 工作流列表（附带 webhook 路径，供快速触发）
+        // ---- 不依赖 n8n 连接的路由 ----
+
+        if (sub === '/health' && req.method === 'GET') {
+          return sendJson(res, 200, { ok: true, ...manager.status() })
+        }
+
+        // 连接状态（脱敏）与运行时覆盖
+        if (sub === '/config' && req.method === 'GET') {
+          return sendJson(res, 200, {
+            ok: true,
+            ...manager.status(),
+            overridden: manager.hasRuntime(),
+            allowedWebhookPaths: manager.config.allowedWebhookPaths ?? [],
+            useTestWebhook: Boolean(manager.config.useTestWebhook)
+          })
+        }
+        if (sub === '/config' && req.method === 'POST') {
+          const body = await readJson(req)
+          const baseUrl = typeof body.baseUrl === 'string' ? body.baseUrl : ''
+          const apiKey = typeof body.apiKey === 'string' ? body.apiKey : ''
+          if (!apiKey.trim()) {
+            return sendJson(res, 400, { ok: false, error: '请填写 n8n API Key' })
+          }
+          let normalized: string
+          try {
+            normalized = normalizeBaseUrl(baseUrl)
+          } catch (err) {
+            return sendJson(res, 400, {
+              ok: false,
+              error: err instanceof Error ? err.message : String(err)
+            })
+          }
+          // 地址与密钥成对保存：绝不出现「新地址 + 旧密钥」的组合
+          manager.setRuntime({ baseUrl: normalized, apiKey: apiKey.trim() })
+          return sendJson(res, 200, { ok: true, ...manager.status(), overridden: true })
+        }
+        if (sub === '/config' && req.method === 'DELETE') {
+          manager.clearRuntime()
+          return sendJson(res, 200, { ok: true, ...manager.status(), overridden: false })
+        }
+
+        // 聚焦状态：让浮窗自动打开某个工作流的内嵌编辑器（无需 n8n 连接）
+        if (sub === '/focus' && req.method === 'GET') {
+          return sendJson(res, 200, { ok: true, ...hudFocus })
+        }
+        if (sub === '/focus' && req.method === 'POST') {
+          const body = await readJson(req)
+          const workflowId = typeof body.workflowId === 'string' ? body.workflowId : null
+          const note = typeof body.note === 'string' ? body.note : undefined
+          return sendJson(res, 200, { ok: true, ...setHudFocus(workflowId, note) })
+        }
+
+        // ---- 以下都需要 n8n 连接 ----
+
+        if (!manager.status().configured) {
+          return sendJson(res, 200, {
+            ok: false,
+            configured: false,
+            error: '尚未配置 n8n 地址或 API Key'
+          })
+        }
+
+        // 工作流列表（分页 + webhook 元数据）
         if (sub === '/workflows' && req.method === 'GET') {
-          const list = await client.listWorkflows({ limit: 100 })
+          const limitRaw = Number(url.searchParams.get('limit') ?? '100')
+          const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 250) : 100
+          const list = await manager.client().listWorkflows({
+            limit,
+            cursor: url.searchParams.get('cursor') ?? undefined
+          })
           const data = (list.data ?? []).map((w) => ({
             id: w.id,
             name: w.name,
@@ -143,16 +205,17 @@ export function registerHudRoutes(webServer: WebServerLike, deps: HudDeps): () =
             activeVersionId: w.activeVersionId ?? null,
             updatedAt: w.updatedAt,
             nodeCount: nodeCountOf(w),
-            webhookPaths: extractWebhookPaths((w as { nodes?: unknown }).nodes)
+            webhooks: extractWebhooks((w as { nodes?: unknown }).nodes)
           }))
           return sendJson(res, 200, { ok: true, data, nextCursor: list.nextCursor ?? null })
         }
 
         // 执行列表
         if (sub === '/executions' && req.method === 'GET') {
-          const limit = Number(url.searchParams.get('limit') ?? '8')
-          const list = await client.listExecutions({
-            limit: Number.isFinite(limit) ? limit : 8,
+          const limitRaw = Number(url.searchParams.get('limit') ?? '8')
+          const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 100) : 8
+          const list = await manager.client().listExecutions({
+            limit,
             workflowId: url.searchParams.get('workflowId') ?? undefined
           })
           const data = (list.data ?? []).map((e) => ({
@@ -165,30 +228,80 @@ export function registerHudRoutes(webServer: WebServerLike, deps: HudDeps): () =
           return sendJson(res, 200, { ok: true, data })
         }
 
-        // 触发（快速启动）
+        // 触发（快速启动）：支持方法、查询串与自定义 payload
         if (sub === '/trigger' && req.method === 'POST') {
-          const body = JSON.parse((await readBody(req)) || '{}') as {
-            webhookPath?: string
-            payload?: unknown
-            test?: boolean
-          }
-          const path = body.webhookPath ?? ''
+          const body = await readJson(req)
+          const path = typeof body.webhookPath === 'string' ? body.webhookPath : ''
           if (!path) return sendJson(res, 400, { ok: false, error: '缺少 webhookPath' })
-          if (!isWebhookPathAllowed(path, config.allowedWebhookPaths)) {
-            return sendJson(res, 403, { ok: false, error: `Webhook 路径不在白名单内：${path}` })
+          if (!isWebhookPathAllowed(path, manager.config.allowedWebhookPaths)) {
+            return sendJson(res, 403, { ok: false, error: `Webhook 路径不在白名单内或路径不安全：${path}` })
           }
-          const result = await client.triggerWebhook(path, body.payload ?? {}, {
-            test: body.test ?? config.useTestWebhook
+          const query =
+            body.query && typeof body.query === 'object' && !Array.isArray(body.query)
+              ? Object.fromEntries(
+                  Object.entries(body.query as Record<string, unknown>).map(([k, v]) => [k, String(v)])
+                )
+              : undefined
+          const result = await manager.client().triggerWebhook(path, body.payload ?? {}, {
+            test: typeof body.test === 'boolean' ? body.test : manager.config.useTestWebhook,
+            method: typeof body.method === 'string' ? body.method : undefined,
+            query
           })
           return sendJson(res, 200, { ok: true, result })
+        }
+
+        // 校验工作流（写之前体检）
+        const validateMatch = /^\/workflows\/([^/]+)\/validate$/.exec(sub)
+        if (validateMatch && req.method === 'GET') {
+          const id = decodeURIComponent(validateMatch[1] as string)
+          const wf = (await manager.client().getWorkflow(id)) as unknown as {
+            nodes?: unknown
+            connections?: unknown
+          }
+          const issues = validateWorkflow(wf.nodes, wf.connections)
+          return sendJson(res, 200, {
+            ok: issues.every((i) => i.level !== 'error'),
+            errors: issues.filter((i) => i.level === 'error').length,
+            warnings: issues.filter((i) => i.level === 'warning').length,
+            issues
+          })
+        }
+
+        // 快照：列出 / 记录 / 恢复（回滚）
+        const snapshotMatch = /^\/workflows\/([^/]+)\/snapshots$/.exec(sub)
+        if (snapshotMatch && req.method === 'GET') {
+          const id = decodeURIComponent(snapshotMatch[1] as string)
+          return sendJson(res, 200, {
+            ok: true,
+            snapshots: editor.listSnapshots(id).map((s) => ({
+              id: s.id,
+              reason: s.reason,
+              createdAt: s.createdAt,
+              nodeCount: Array.isArray(s.nodes) ? s.nodes.length : 0
+            }))
+          })
+        }
+        if (snapshotMatch && req.method === 'POST') {
+          const id = decodeURIComponent(snapshotMatch[1] as string)
+          const snap = await editor.capture(id, 'HUD 手动快照')
+          return sendJson(res, 200, { ok: true, snapshotId: snap.id, createdAt: snap.createdAt })
+        }
+        const restoreMatch = /^\/workflows\/([^/]+)\/restore$/.exec(sub)
+        if (restoreMatch && req.method === 'POST') {
+          const id = decodeURIComponent(restoreMatch[1] as string)
+          const body = await readJson(req)
+          const snapshotId = typeof body.snapshotId === 'string' ? body.snapshotId : undefined
+          return sendJson(res, 200, await editor.restore(id, snapshotId))
         }
 
         // 启用 / 停用工作流
         const toggle = /^\/workflows\/([^/]+)\/(activate|deactivate)$/.exec(sub)
         if (toggle && req.method === 'POST') {
           const id = decodeURIComponent(toggle[1] as string)
-          const action = toggle[2]
-          const out = action === 'activate' ? await client.activateWorkflow(id) : await client.deactivateWorkflow(id)
+          const out =
+            toggle[2] === 'activate'
+              ? await manager.client().activateWorkflow(id)
+              : await manager.client().deactivateWorkflow(id)
           return sendJson(res, 200, { ok: true, data: out })
         }
 
@@ -211,7 +324,8 @@ export function registerHudRoutes(webServer: WebServerLike, deps: HudDeps): () =
           })
         }
         const message = err instanceof Error ? err.message : String(err)
-        return sendJson(res, 200, { ok: false, error: message })
+        const status = /请求体|JSON/.test(message) ? 400 : 200
+        return sendJson(res, status, { ok: false, error: message })
       }
     }
   })

@@ -22,10 +22,18 @@ export interface SandboxOptions {
   dataVolume: string
   /** 容器时区。 */
   timezone: string
+  /** 可选：内存上限（MB）。 */
+  memoryLimitMb?: number
+  /** 可选：CPU 配额（如 "1.5"）。 */
+  cpus?: string
+  /** 可选：PID 上限。 */
+  pidsLimit?: number
+  /** 是否禁止提权（--security-opt no-new-privileges）。默认 true。 */
+  noNewPrivileges?: boolean
 }
 
 export interface Config {
-  /** n8n 实例基址（可留空：改用环境变量 N8N_BASE_URL 或沙箱端点）。 */
+  /** n8n 实例基址（可留空：改用环境变量 N8N_BASE_URL、沙箱端点，或在玻璃浮窗里填写）。 */
   baseUrl?: string
   /** n8n 公开 API Key（敏感）。建议改用环境变量 N8N_API_KEY，避免写入配置文件。 */
   apiKey?: string
@@ -58,6 +66,10 @@ export const Config: Schema<Config> = Schema.object({
     hostPort: Schema.number().default(5679),
     containerPort: Schema.number().default(5678),
     dataVolume: Schema.string().default('dsh-n8n-lg-data'),
-    timezone: Schema.string().default('Asia/Shanghai')
+    timezone: Schema.string().default('Asia/Shanghai'),
+    memoryLimitMb: Schema.number(),
+    cpus: Schema.string(),
+    pidsLimit: Schema.number(),
+    noNewPrivileges: Schema.boolean().default(true)
   }).default({})
 })

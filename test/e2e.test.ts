@@ -3,12 +3,12 @@
  *
  * 起一个忠实复刻 n8n 公开 API 契约的本地 HTTP 服务（路径 / 鉴权头 / 响应体结构
  * 均与 n8n 2.44.0 一致），再通过 registerTools 注册真实工具定义，
- * 直接调用工具 execute，跑通「工具 → N8nClient → HTTP → 响应」全链路。
+ * 直接调用工具 execute，跑通「工具 → ConnectionManager → N8nClient → HTTP → 响应」全链路。
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { N8nClient } from '../src/n8n/client'
+import { ConnectionManager } from '../src/connection'
 import { registerTools } from '../src/tools/index'
 import type { Config } from '../src/config'
 
@@ -40,8 +40,17 @@ let server: Server
 let baseUrl: string
 /** 记录 webhook 收到的请求体，供断言。 */
 const webhookReceived: unknown[] = []
+/** 内存工作流存储（让 PUT/GET 有真实状态，add_nodes 才能被验证）。 */
+const store = new Map<string, Record<string, unknown>>()
+let nextId = 1
+
+function seed(id: string, name: string, nodes: unknown[] = []): void {
+  store.set(id, { id, name, active: false, nodes, connections: {}, settings: {} })
+}
 
 beforeAll(async () => {
+  seed('w-new', 'new-wf')
+  seed('w-build', 'build-wf')
   server = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost')
 
@@ -58,11 +67,30 @@ beforeAll(async () => {
       if (req.headers['x-n8n-api-key'] !== API_KEY) {
         return sendJson(res, 401, { message: 'unauthorized' })
       }
-      if (req.method === 'GET' && url.pathname === '/api/v1/workflows') {
-        return sendJson(res, 200, { data: [WORKFLOW], nextCursor: null })
+
+      const wfMatch = /^\/api\/v1\/workflows\/([^/]+)$/.exec(url.pathname)
+      if (wfMatch) {
+        const id = decodeURIComponent(wfMatch[1] as string)
+        if (req.method === 'GET') {
+          if (id === '1') return sendJson(res, 200, WORKFLOW)
+          const found = store.get(id)
+          return found ? sendJson(res, 200, found) : sendJson(res, 404, { message: 'not found' })
+        }
+        if (req.method === 'PUT') {
+          const body = JSON.parse((await readBody(req)) || '{}') as Record<string, unknown>
+          const prev = store.get(id) ?? { id }
+          const next = { ...prev, ...body, id }
+          store.set(id, next)
+          return sendJson(res, 200, next)
+        }
+        if (req.method === 'DELETE') {
+          store.delete(id)
+          return sendJson(res, 200, {})
+        }
       }
-      if (req.method === 'GET' && url.pathname === '/api/v1/workflows/1') {
-        return sendJson(res, 200, WORKFLOW)
+
+      if (req.method === 'GET' && url.pathname === '/api/v1/workflows') {
+        return sendJson(res, 200, { data: [WORKFLOW, ...store.values()], nextCursor: null })
       }
       if (req.method === 'GET' && url.pathname === '/api/v1/executions') {
         return sendJson(res, 200, { data: [EXECUTION], nextCursor: null })
@@ -70,21 +98,18 @@ beforeAll(async () => {
       if (req.method === 'GET' && url.pathname === '/api/v1/executions/100') {
         return sendJson(res, 200, EXECUTION)
       }
-      // 工作流 CRUD / 执行操作
       if (req.method === 'POST' && url.pathname === '/api/v1/workflows') {
-        return sendJson(res, 201, { id: 'w-new', name: 'new-wf', active: false })
+        const body = JSON.parse((await readBody(req)) || '{}') as Record<string, unknown>
+        const id = `w-${nextId++}`
+        store.set(id, { id, active: false, connections: {}, settings: {}, ...body })
+        return sendJson(res, 201, store.get(id))
       }
-      if (req.method === 'PUT' && url.pathname === '/api/v1/workflows/w-new') {
-        return sendJson(res, 200, { id: 'w-new', name: 'renamed', active: false })
-      }
-      if (req.method === 'POST' && url.pathname === '/api/v1/workflows/w-new/publish') {
-        return sendJson(res, 200, { id: 'w-new', active: true })
-      }
-      if (req.method === 'POST' && url.pathname === '/api/v1/workflows/w-new/deactivate') {
-        return sendJson(res, 200, { id: 'w-new', active: false })
-      }
-      if (req.method === 'DELETE' && url.pathname === '/api/v1/workflows/w-new') {
-        return sendJson(res, 200, {})
+      const publishMatch = /^\/api\/v1\/workflows\/([^/]+)\/(publish|deactivate)$/.exec(url.pathname)
+      if (publishMatch && req.method === 'POST') {
+        const id = decodeURIComponent(publishMatch[1] as string)
+        const found = store.get(id)
+        if (found) found.active = publishMatch[2] === 'publish'
+        return sendJson(res, 200, found ?? { id, active: publishMatch[2] === 'publish' })
       }
       if (req.method === 'POST' && url.pathname === '/api/v1/executions/100/retry') {
         return sendJson(res, 200, { id: '101', status: 'new' })
@@ -106,7 +131,27 @@ afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()))
 })
 
-/** 构造一个只捕获工具定义的假 Context。 */
+function makeConfig(overrides: Partial<Config> = {}): Config {
+  return {
+    baseUrl,
+    apiKey: API_KEY,
+    allowedWebhookPaths: [],
+    timeoutMs: 5000,
+    useTestWebhook: false,
+    sandbox: {
+      enabled: false,
+      image: '',
+      containerName: '',
+      hostPort: 5679,
+      containerPort: 5678,
+      dataVolume: '',
+      timezone: ''
+    },
+    ...overrides
+  }
+}
+
+/** 构造一个只捕获工具定义的假 Context + 真实连接管理器。 */
 function collectTools(config: Config) {
   const tools = new Map<string, { execute: (args: unknown, exec: unknown) => Promise<unknown> }>()
   const ctx = {
@@ -116,29 +161,24 @@ function collectTools(config: Config) {
       }
     }
   }
-  const client = new N8nClient({
-    baseUrl: config.baseUrl,
-    apiKey: config.apiKey,
-    timeoutMs: config.timeoutMs
-  })
-  registerTools(ctx as never, client, config)
+  const manager = new ConnectionManager(config, {})
+  registerTools(ctx as never, manager, config)
   const exec = { signal: new AbortController().signal, deferContext() {}, concludeTurn() {} }
-  return { tools, exec }
+  return { tools, exec, manager }
 }
 
-function makeConfig(overrides: Partial<Config> = {}): Config {
-  return {
-    baseUrl,
-    apiKey: API_KEY,
-    allowedWebhookPaths: [],
-    timeoutMs: 5000,
-    useTestWebhook: false,
-    ...overrides
-  }
-}
+const node = (id: string, name: string, extra: Record<string, unknown> = {}) => ({
+  id,
+  name,
+  type: 'n8n-nodes-base.code',
+  typeVersion: 2,
+  position: [0, 0],
+  parameters: {},
+  ...extra
+})
 
-describe('E2E：工具 → N8nClient → n8n(本地复刻)', () => {
-  it('注册了全部 14 个 n8n 工具', () => {
+describe('E2E：工具 → ConnectionManager → N8nClient → n8n(本地复刻)', () => {
+  it('注册了全部 17 个 n8n 工具', () => {
     const { tools } = collectTools(makeConfig())
     expect([...tools.keys()].sort()).toEqual([
       'n8n_activate_workflow',
@@ -151,11 +191,20 @@ describe('E2E：工具 → N8nClient → n8n(本地复刻)', () => {
       'n8n_list_executions',
       'n8n_list_workflows',
       'n8n_open_editor',
+      'n8n_restore_workflow',
       'n8n_retry_execution',
+      'n8n_snapshot_workflow',
       'n8n_stop_execution',
       'n8n_trigger_workflow',
-      'n8n_update_workflow'
+      'n8n_update_workflow',
+      'n8n_validate_workflow'
     ])
+  })
+
+  it('未配置连接时工具仍然注册，调用时才报可读错误', async () => {
+    const { tools } = collectTools(makeConfig({ baseUrl: '', apiKey: '' }))
+    expect(tools.size).toBe(17)
+    await expect(tools.get('n8n_list_workflows')!.execute({}, {})).rejects.toThrow(/尚未配置 n8n 连接/)
   })
 
   it('n8n_list_workflows 返回 n8n 原始 {data,nextCursor}', async () => {
@@ -164,15 +213,13 @@ describe('E2E：工具 → N8nClient → n8n(本地复刻)', () => {
       data: unknown[]
       nextCursor: null
     }
-    expect(out.data).toEqual([WORKFLOW])
+    expect(out.data.length).toBeGreaterThan(0)
     expect(out.nextCursor).toBeNull()
   })
 
   it('n8n_get_workflow 返回单个工作流', async () => {
     const { tools, exec } = collectTools(makeConfig())
-    const out = (await tools.get('n8n_get_workflow')!.execute({ workflowId: '1' }, exec)) as {
-      name: string
-    }
+    const out = (await tools.get('n8n_get_workflow')!.execute({ workflowId: '1' }, exec)) as { name: string }
     expect(out.name).toBe('deploy')
   })
 
@@ -193,20 +240,16 @@ describe('E2E：工具 → N8nClient → n8n(本地复刻)', () => {
     expect(webhookReceived[0]).toEqual({ env: 'prod' })
   })
 
-  it('n8n_get_execution_status 返回执行对象', async () => {
+  it('n8n_get_execution_status / n8n_list_executions 正常返回', async () => {
     const { tools, exec } = collectTools(makeConfig())
-    const out = (await tools
-      .get('n8n_get_execution_status')!
-      .execute({ executionId: '100' }, exec)) as { status: string }
-    expect(out.status).toBe('success')
-  })
-
-  it('n8n_list_executions 返回执行列表', async () => {
-    const { tools, exec } = collectTools(makeConfig())
-    const out = (await tools.get('n8n_list_executions')!.execute({ status: 'success' }, exec)) as {
+    const one = (await tools.get('n8n_get_execution_status')!.execute({ executionId: '100' }, exec)) as {
+      status: string
+    }
+    expect(one.status).toBe('success')
+    const list = (await tools.get('n8n_list_executions')!.execute({ status: 'success' }, exec)) as {
       data: unknown[]
     }
-    expect(out.data).toEqual([EXECUTION])
+    expect(list.data).toEqual([EXECUTION])
   })
 
   it('白名单拒绝未授权 webhook 路径', async () => {
@@ -214,6 +257,13 @@ describe('E2E：工具 → N8nClient → n8n(本地复刻)', () => {
     await expect(
       tools.get('n8n_trigger_workflow')!.execute({ webhookPath: 'danger' }, exec)
     ).rejects.toThrow(/白名单/)
+  })
+
+  it('白名单无法被点段绕过（回归）', async () => {
+    const { tools, exec } = collectTools(makeConfig({ allowedWebhookPaths: ['deploy/*'] }))
+    await expect(
+      tools.get('n8n_trigger_workflow')!.execute({ webhookPath: 'deploy/../healthz' }, exec)
+    ).rejects.toThrow(/白名单|不安全/)
   })
 
   it('API Key 错误时公开 API 抛错（服务端 401）', async () => {
@@ -225,20 +275,25 @@ describe('E2E：工具 → N8nClient → n8n(本地复刻)', () => {
     const { tools, exec } = collectTools(makeConfig())
     const created = (await tools
       .get('n8n_create_workflow')!
-      .execute({ workflow: { name: 'new-wf', nodes: [], connections: {} } }, exec)) as { id: string }
-    expect(created.id).toBe('w-new')
+      .execute({ workflow: { name: 'new-wf', nodes: [], connections: {} } }, exec)) as {
+      ok: boolean
+      workflow: { id: string }
+    }
+    expect(created.ok).toBe(true)
+    const id = created.workflow.id
+    expect(id).toBeTruthy()
 
-    const act = (await tools.get('n8n_activate_workflow')!.execute({ workflowId: 'w-new' }, exec)) as {
+    const act = (await tools.get('n8n_activate_workflow')!.execute({ workflowId: id }, exec)) as {
       active: boolean
     }
     expect(act.active).toBe(true)
 
-    const deact = (await tools
-      .get('n8n_deactivate_workflow')!
-      .execute({ workflowId: 'w-new' }, exec)) as { active: boolean }
+    const deact = (await tools.get('n8n_deactivate_workflow')!.execute({ workflowId: id }, exec)) as {
+      active: boolean
+    }
     expect(deact.active).toBe(false)
 
-    const del = (await tools.get('n8n_delete_workflow')!.execute({ workflowId: 'w-new' }, exec)) as {
+    const del = (await tools.get('n8n_delete_workflow')!.execute({ workflowId: id }, exec)) as {
       deleted: boolean
     }
     expect(del.deleted).toBe(true)
@@ -246,13 +301,147 @@ describe('E2E：工具 → N8nClient → n8n(本地复刻)', () => {
 
   it('n8n_retry_execution / n8n_stop_execution 正常返回', async () => {
     const { tools, exec } = collectTools(makeConfig())
-    const r = (await tools.get('n8n_retry_execution')!.execute({ executionId: '100' }, exec)) as {
-      id: string
-    }
+    const r = (await tools.get('n8n_retry_execution')!.execute({ executionId: '100' }, exec)) as { id: string }
     expect(r.id).toBe('101')
     const s = (await tools.get('n8n_stop_execution')!.execute({ executionId: '100' }, exec)) as {
       status: string
     }
     expect(s.status).toBe('canceled')
+  })
+})
+
+describe('E2E：可视化搭建（n8n_add_nodes / open_editor / validate / 回滚）', () => {
+  it('n8n_add_nodes 追加节点、合并连接，并能读回验证', async () => {
+    const { tools, exec } = collectTools(makeConfig())
+    seed('w-build', 'build-wf')
+    const out = (await tools.get('n8n_add_nodes')!.execute(
+      {
+        workflowId: 'w-build',
+        nodes: [node('h1', 'Webhook', { type: 'n8n-nodes-base.webhook', parameters: { path: 'hook' } })],
+        connections: {},
+        stepId: 'step-webhook'
+      },
+      exec
+    )) as { ok: boolean; added: number; nodeCount: number; verified: boolean; snapshotId: string }
+    expect(out.ok).toBe(true)
+    expect(out.added).toBe(1)
+    expect(out.nodeCount).toBe(1)
+    expect(out.verified).toBe(true)
+    expect(out.snapshotId).toBeTruthy()
+    expect((store.get('w-build')!.nodes as unknown[]).length).toBe(1)
+  })
+
+  it('同一步骤重复调用不会重复写入（幂等）', async () => {
+    const { tools, exec } = collectTools(makeConfig())
+    seed('w-build', 'build-wf')
+    const args = {
+      workflowId: 'w-build',
+      nodes: [node('n1', 'OnlyOnce')],
+      stepId: 'step-idempotent'
+    }
+    await tools.get('n8n_add_nodes')!.execute(args, exec)
+    const second = (await tools.get('n8n_add_nodes')!.execute(args, exec)) as { added: number }
+    expect(second.added).toBe(0)
+    expect((store.get('w-build')!.nodes as unknown[]).length).toBe(1)
+  })
+
+  it('AI 连线（非 main 通道）不会被覆盖', async () => {
+    const { tools, exec } = collectTools(makeConfig())
+    seed('w-build', 'build-wf', [node('m1', 'Model')])
+    store.get('w-build')!.connections = {
+      Model: { ai_languageModel: [[{ node: 'OldAgent', type: 'ai_languageModel', index: 0 }]] }
+    }
+    await tools.get('n8n_add_nodes')!.execute(
+      {
+        workflowId: 'w-build',
+        nodes: [node('m2', 'Model2')],
+        connections: {
+          Model: { ai_languageModel: [[{ node: 'NewAgent', type: 'ai_languageModel', index: 0 }]] }
+        }
+      },
+      exec
+    )
+    const conn = store.get('w-build')!.connections as Record<string, Record<string, unknown[][]>>
+    const links = conn.Model!.ai_languageModel![0] as Array<{ node: string }>
+    expect(links.map((l) => l.node)).toEqual(['OldAgent', 'NewAgent'])
+  })
+
+  it('n8n_add_nodes 拒绝编造的节点类型（knownTypes）', async () => {
+    const { tools, exec } = collectTools(makeConfig())
+    seed('w-build', 'build-wf')
+    const out = (await tools.get('n8n_add_nodes')!.execute(
+      {
+        workflowId: 'w-build',
+        nodes: [node('bad1', 'Fake', { type: 'n8n-nodes-base.deepseekChatModel' })],
+        knownTypes: ['n8n-nodes-base.code']
+      },
+      exec
+    )) as { ok: boolean; issues: Array<{ level: string; message: string }> }
+    expect(out.ok).toBe(false)
+    expect(out.issues.some((i) => i.message.includes('不支持该节点类型'))).toBe(true)
+    expect((store.get('w-build')!.nodes as unknown[]).length).toBe(0)
+  })
+
+  it('n8n_validate_workflow 能查出重复 Webhook 路径', async () => {
+    const { tools, exec } = collectTools(makeConfig())
+    const out = (await tools.get('n8n_validate_workflow')!.execute(
+      {
+        nodes: [
+          node('w1', 'H1', { type: 'n8n-nodes-base.webhook', parameters: { path: 'same' } }),
+          node('w2', 'H2', { type: 'n8n-nodes-base.webhook', parameters: { path: 'same' } })
+        ],
+        connections: {}
+      },
+      exec
+    )) as { ok: boolean; errors: number; issues: Array<{ message: string }> }
+    expect(out.ok).toBe(false)
+    expect(out.issues.some((i) => i.message.includes('Webhook 路径重复'))).toBe(true)
+  })
+
+  it('n8n_snapshot_workflow + n8n_restore_workflow 可以回滚', async () => {
+    const { tools, exec } = collectTools(makeConfig())
+    seed('w-undo', 'undo-wf', [node('n1', 'A')])
+    const snap = (await tools.get('n8n_snapshot_workflow')!.execute({ workflowId: 'w-undo' }, exec)) as {
+      snapshotId: string
+    }
+    expect(snap.snapshotId).toBeTruthy()
+
+    await tools.get('n8n_add_nodes')!.execute({ workflowId: 'w-undo', nodes: [node('n2', 'B')] }, exec)
+    expect((store.get('w-undo')!.nodes as unknown[]).length).toBe(2)
+
+    const restored = (await tools.get('n8n_restore_workflow')!.execute({ workflowId: 'w-undo' }, exec)) as {
+      ok: boolean
+      nodeCount: number
+    }
+    expect(restored.ok).toBe(true)
+    expect(restored.nodeCount).toBe(1)
+    expect((store.get('w-undo')!.nodes as unknown[]).length).toBe(1)
+  })
+
+  it('n8n_open_editor 返回编辑器链接与 rev', async () => {
+    const { tools, exec } = collectTools(makeConfig())
+    const out = (await tools.get('n8n_open_editor')!.execute({ workflowId: 'w1', note: '搭建中' }, exec)) as {
+      ok: boolean
+      editorUrl: string
+      rev: number
+    }
+    expect(out.ok).toBe(true)
+    expect(out.editorUrl).toBe(`${baseUrl}/workflow/w1`)
+    expect(out.rev).toBeGreaterThan(0)
+  })
+
+  it('n8n_update_workflow 自动补全 n8n 要求的必填字段', async () => {
+    const { tools, exec } = collectTools(makeConfig())
+    seed('w-upd', 'orig', [node('n1', 'A')])
+    const out = (await tools.get('n8n_update_workflow')!.execute(
+      { workflowId: 'w-upd', workflow: { name: 'renamed' } },
+      exec
+    )) as { ok: boolean; verified: boolean }
+    expect(out.ok).toBe(true)
+    const stored = store.get('w-upd')!
+    expect(stored.name).toBe('renamed')
+    expect(Array.isArray(stored.nodes)).toBe(true)
+    expect(stored.connections).toBeDefined()
+    expect(stored.settings).toBeDefined()
   })
 })

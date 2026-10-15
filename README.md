@@ -117,53 +117,76 @@ dsh plugin --profile desktop add dsh-n8n-lg
 
 ---
 
-## 提供的工具（14 个）
+## 提供的工具（17 个）
 
 | 工具 | 对应 n8n 接口 |
 |---|---|
 | `n8n_list_workflows` | `GET /api/v1/workflows` |
 | `n8n_get_workflow` | `GET /api/v1/workflows/{id}` |
-| `n8n_create_workflow` | `POST /api/v1/workflows` |
-| `n8n_update_workflow` | `PUT /api/v1/workflows/{id}` |
+| `n8n_create_workflow` | `POST /api/v1/workflows`（写前校验） |
+| `n8n_update_workflow` | `PUT /api/v1/workflows/{id}`（自动补全必填字段，默认存草稿） |
 | `n8n_delete_workflow` | `DELETE /api/v1/workflows/{id}` |
 | `n8n_activate_workflow` | `POST /api/v1/workflows/{id}/publish`（回退 `/activate`） |
 | `n8n_deactivate_workflow` | `POST /api/v1/workflows/{id}/deactivate` |
-| `n8n_trigger_workflow` | `POST {n8n}/webhook/{path}`（n8n 公开 API 无触发端点） |
+| `n8n_trigger_workflow` | 请求 `{n8n}/webhook/{path}`（支持 method / query / payload） |
 | `n8n_get_execution_status` | `GET /api/v1/executions/{id}` |
 | `n8n_list_executions` | `GET /api/v1/executions` |
 | `n8n_retry_execution` | `POST /api/v1/executions/{id}/retry` |
 | `n8n_stop_execution` | `POST /api/v1/executions/{id}/stop` |
-| `n8n_add_nodes` | 增量加节点/连线（**可视化搭建**核心：一次一步） |
+| `n8n_add_nodes` | 增量加节点/连线（**幂等 + 校验 + 读回验证 + 自动快照**） |
 | `n8n_open_editor` | 让玻璃浮窗**自动打开内嵌 n8n 编辑器** |
+| `n8n_validate_workflow` | 保存前体检：缺字段 / 重名 / 重复 Webhook 路径 / 悬空连线 / 不存在的节点类型 |
+| `n8n_snapshot_workflow` | 记录内存快照（**回滚点**，每个工作流保留最近 5 份） |
+| `n8n_restore_workflow` | 恢复到快照（**一步撤销**；恢复前会先给当前状态留快照） |
 
 参数名、取值语义与响应体均与 n8n 公开 API 保持一致，响应**原样透传**（不做改名/裁剪）。
+
+### 为什么写操作是安全的
+
+所有写操作都经过内部的 `WorkflowEditor`：
+
+- **幂等**：`n8n_add_nodes` 支持 `stepId`，同一步骤重试不会重复写入；节点按 id / name 去重。
+- **串行**：同一工作流的写操作排队执行，避免并发读改写互相覆盖（丢更新）。
+- **全通道合并**：连线按 `main` / `ai_languageModel` / `ai_tool` 等**所有通道**合并去重，不会覆盖既有连线。
+- **写前校验**：缺 id/name/type、重名、重复 Webhook 路径、悬空连线都会被拦下，**有 error 就不写**。
+- **写后验证**：写入后读回确认节点真的存在，结果里返回 `verified`。
+- **可回滚**：每次写入前自动留一份快照，`n8n_restore_workflow` 可撤销。
 
 ### 容器沙箱工具（`sandbox.enabled: true` 时额外注册）
 
 | 工具 | 作用 |
 |---|---|
-| `n8n_sandbox_start` | 启动（不存在则创建），返回 endpoint |
+| `n8n_sandbox_start` | 启动（不存在则创建），返回 endpoint + `live`/`ready` |
 | `n8n_sandbox_stop` | 停止容器 |
-| `n8n_sandbox_status` | 状态 + `/healthz` 健康探测 |
-| `n8n_sandbox_logs` | 读取容器日志 |
+| `n8n_sandbox_status` | 状态（含 `managed`）+ 存活与**就绪**探测 |
+| `n8n_sandbox_logs` | 读取容器日志（tail 上限 2000） |
 | `n8n_sandbox_remove` | 删除容器（保留数据卷，不丢数据） |
 
 启用后沙箱会注册为 Cordis 服务 `ctx.n8nSandbox`，其他插件可 `inject: ['n8nSandbox']` 复用。
+
+> **安全边界**：这是**普通的持久化 Docker 隔离**，适合运行**受信任**的工作流，
+> **不是**可安全执行任意恶意代码的强沙箱。可用 `sandbox.memoryLimitMb` / `cpus` /
+> `pidsLimit` / `noNewPrivileges` 加固。容器带 `dsh-n8n-lg.managed=true` 标签，
+> 同名但非本插件创建的容器会被**拒绝操作**。
 
 ---
 
 ## 玻璃 HUD 浮窗
 
 - **位置**：界面右下角的玻璃球（`n8n`），点开是监控面板，点 `—` 收起。
-- **连接配置**：直接填 n8n 地址（默认 `http://127.0.0.1:5678`）与 API Key，点「保存」（存本地 `localStorage`）。
-- **工作流**：列出工作流 + 启用状态；可「启用/停用」；带 Webhook 的显示「触发」按钮。
+- **连接配置**：填 n8n 地址（默认 `http://127.0.0.1:5678`）与 API Key，点「保存」。
+  保存后配置交给宿主，**AI 工具与浮窗从此指向同一个实例**；面板上会显示当前连接来源。
+- **工作流**：列出工作流 + 启用状态；可「编辑」「启用/停用」「触发」「快照」「回滚」。
+- **触发 body**：面板里有 JSON 输入框，触发时作为请求体发送（支持 GET 类 Webhook）。
 - **内嵌编辑器**：点「编辑」→ 面板变宽并内嵌 n8n 编辑器；AI 每保存一次自动刷新。
-- **最近执行**：最近 8 条执行 + 状态徽章。
-- **自动刷新**：每 5 秒轮询一次。
+  **要自己改就先关掉「自动刷新」**，避免刷新打断编辑。
+- **最近执行**：最近 8 条执行 + 状态徽章；执行列表获取失败会单独提示，不会假装一切正常。
+- **自动刷新**：每 5 秒轮询一次（连接状态、工作流、执行、AI 聚焦指令）。
 
 > 实现说明：n8n 的 API **不返回 CORS 头**，浏览器不能直连，所以浮窗的请求走插件 node 半在 DSH
 > webServer 上注册的**同源代理路由** `/api/dsh-n8n-lg/*`，由服务端再去访问 n8n。
 > 浮窗需要宿主提供 `webServer`（Web / 桌面端 profile 都有）；纯 headless profile 下浮窗不会挂载，但工具照常可用。
+> 浮窗**不携带**连接凭据，凭据只存在于宿主的连接管理器里，前端只拿到脱敏状态（仅 origin）。
 
 ---
 
@@ -172,24 +195,31 @@ dsh plugin --profile desktop add dsh-n8n-lg
 详细操作契约（含踩坑清单）见 [`docs/可视化搭建工作流.md`](./docs/可视化搭建工作流.md)。
 
 一句话：**说需求 → AI 用 `n8n_create_workflow` 建空工作流 → `n8n_open_editor` 弹出编辑器 →
-反复 `n8n_add_nodes` 一次加一步 → `n8n_activate_workflow` 激活 → 点「触发」试跑**。
+反复 `n8n_add_nodes` 一次加一步（带 `stepId`）→ `n8n_validate_workflow` 体检 →
+`n8n_activate_workflow` 激活 → 点「触发」试跑**。出错就用 `n8n_restore_workflow` 回滚。
 
 ---
 
 ## ⚠️ 注意事项
 
 1. **必须重启才生效**：bundle 有变更时，需要重启对应 profile / DSH 桌面端。
-2. **触发走 Webhook**：n8n 公开 API 没有触发端点，所以触发是 POST 到工作流自己的 Webhook。
+2. **触发走 Webhook**：n8n 公开 API 没有触发端点，所以触发是请求工作流自己的 Webhook。
    工作流里得有 **Webhook 节点**，并且**已激活**——否则会收到 404。
-3. **激活后等几秒再触发**：n8n 注册 webhook 是**异步**的，激活后立刻触发可能 404，等 3–5 秒即可。
-4. **`Manual Trigger` 不能激活工作流**：n8n 要求至少一个 Webhook / Schedule 之类的真触发器。
-5. **同一工作流里 Webhook 路径不能重复**：否则 `publish` 报 `409 webhook path conflict`。
-6. **`publish` 会校验节点配置与凭据**：缺参数或缺凭据都会 400（例如 Google Sheets 的 OAuth 凭据）。
-7. **浮窗依赖 `webServer`**：纯 headless profile 下没有浮窗（工具仍可用）。
-8. **沙箱需要 Docker**：`sandbox.enabled: true` 时 Docker 守护进程要在运行。
-9. **`executeCommand` 节点在 n8n v2 默认被禁用**（安全考虑）。如果你的工作流要用它，
-   需要给 n8n 设 `NODES_EXCLUDE=[]`。
-10. **实测环境**：Windows + DSH 桌面端 + n8n 2.x。其他平台/版本我还没条件验证，欢迎反馈。
+3. **200 通常只表示「已接收」**：除非 Webhook 的响应模式是「最后一个节点」，否则拿不到执行结果。
+   想看结果请用 `n8n_get_execution_status`。
+4. **激活后等几秒再触发**：n8n 注册 webhook 是**异步**的，激活后立刻触发可能 404，等 3–5 秒即可。
+5. **`Manual Trigger` 不能激活工作流**：n8n 要求至少一个 Webhook / Schedule 之类的真触发器。
+6. **同一工作流里 Webhook 路径不能重复**：否则 `publish` 报 `409 webhook path conflict`
+   （`n8n_validate_workflow` 可以提前查出来）。
+7. **`publish` 会校验节点配置与凭据**：缺参数或缺凭据都会 400（例如 Google Sheets 的 OAuth 凭据）。
+   「能保存」不等于「能激活」，更不等于「业务能跑通」。
+8. **快照只在内存里**：`n8n_snapshot_workflow` 的快照进程重启即失效，也不能替代 n8n 自身的备份。
+9. **浮窗依赖 `webServer`**：纯 headless profile 下没有浮窗（工具仍可用）。
+10. **沙箱需要 Docker**：`sandbox.enabled: true` 时 Docker 守护进程要在运行；
+    容器不是强隔离，只适合受信任的工作流。
+11. **`executeCommand` 节点在 n8n v2 默认被禁用**（安全考虑）。如果你的工作流要用它，
+    需要给 n8n 设 `NODES_EXCLUDE=[]`——这会允许工作流在你机器上执行 shell 命令，请自行权衡。
+12. **实测环境**：Windows + DSH 桌面端 + n8n 2.x。其他平台/版本我还没条件验证，欢迎反馈。
 
 ---
 

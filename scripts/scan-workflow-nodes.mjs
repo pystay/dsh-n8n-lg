@@ -12,6 +12,7 @@
  *        node scripts/scan-workflow-nodes.mjs
  *
  * 输出：每个工作流的节点总数、非法节点清单（名称 / 类型）。
+ * 会跟随 nextCursor 翻页，避免工作流超过一页时漏检。
  */
 import { readFileSync } from 'node:fs'
 
@@ -29,16 +30,44 @@ for (const n of JSON.parse(readFileSync(nodesJson, 'utf8'))) {
 }
 
 const headers = { 'X-N8N-API-KEY': key, Accept: 'application/json' }
-const res = await fetch(`${base}/api/v1/workflows?limit=250`, { headers })
-if (!res.ok) {
-  console.error('读取工作流失败', res.status, (await res.text()).slice(0, 200))
+const PAGE = 250
+const MAX_PAGES = 40
+
+/** 翻页拉取全部工作流（直到 nextCursor 为空）。 */
+async function fetchAllWorkflows() {
+  const all = []
+  let cursor
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const query = new URLSearchParams({ limit: String(PAGE) })
+    if (cursor) query.set('cursor', cursor)
+    const res = await fetch(`${base}/api/v1/workflows?${query.toString()}`, { headers })
+    if (!res.ok) {
+      throw new Error(`读取工作流失败 HTTP ${res.status}：${(await res.text()).slice(0, 200)}`)
+    }
+    const body = await res.json()
+    all.push(...(body.data ?? []))
+    cursor = body.nextCursor
+    if (!cursor) return { workflows: all, complete: true }
+  }
+  return { workflows: all, complete: false }
+}
+
+let result
+try {
+  result = await fetchAllWorkflows()
+} catch (err) {
+  console.error(err instanceof Error ? err.message : String(err))
   process.exit(1)
 }
-const { data } = await res.json()
 
+const { workflows, complete } = result
 let totalBad = 0
-console.log(`对照 ${valid.size} 个合法节点类型，共 ${data.length} 个工作流：\n`)
-for (const wf of data) {
+console.log(
+  `对照 ${valid.size} 个合法节点类型，共 ${workflows.length} 个工作流` +
+    (complete ? '：\n' : `（⚠ 超过 ${MAX_PAGES} 页上限，结果可能不完整）：\n`)
+)
+
+for (const wf of workflows) {
   const bad = (wf.nodes ?? []).filter((n) => !valid.has(n.type))
   totalBad += bad.length
   console.log(`[${wf.name}] id=${wf.id} 节点数=${(wf.nodes ?? []).length} active=${wf.active}`)
@@ -46,5 +75,6 @@ for (const wf of data) {
   else for (const n of bad) console.log(`   ❌ ${JSON.stringify(n.name)}  type=${JSON.stringify(n.type)}`)
   console.log('')
 }
+
 console.log(`合计非法节点：${totalBad}`)
-process.exitCode = totalBad > 0 ? 2 : 0
+process.exitCode = totalBad > 0 || !complete ? 2 : 0
