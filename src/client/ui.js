@@ -7,8 +7,9 @@
  * 设计要点：
  *  - `inject = []`：不依赖宿主服务、不占布局槽，浮窗挂在 document.body 上自管几何。
  *  - 零依赖、不 import 任何 @deepseek-ai/*，纯 DOM + 原生 fetch。
- *  - 内嵌编辑器：n8n 未设 X-Frame-Options，故用 <iframe> 直接嵌（桌面端 webviewTag=false，
- *    且 window.open 会被桌面端转交系统浏览器打开）。
+ *  - 编辑器：先问宿主 n8n 是否允许被内嵌（桌面端 webviewTag=false，用 <iframe>；
+ *    但 n8n 2.43.5 会返回 X-Frame-Options: SAMEORIGIN → 此时改为给出说明 +
+ *    「在系统浏览器打开」入口，避免用户面对一片空白）。
  *  - 生命周期交给 ctx.effect：卸载 / HMR 时自动销毁窗口、定时器与在途请求。
  *  - 观看模式 vs 手动编辑：关闭「自动刷新」后不再强制重载，避免打断用户正在改的内容。
  */
@@ -62,6 +63,8 @@ var CSS = [
   '.dshn8n-editor-bar{display:flex;align-items:center;gap:6px;padding:8px 12px;}',
   '.dshn8n-editor-bar .t{flex:1;font-size:12px;color:#c7d0e6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
   '.dshn8n-frame{width:100%;height:min(56vh,520px);border:0;background:#0b0d16;display:block;}',
+  '.dshn8n-embed-notice{padding:20px 16px;font-size:12.5px;color:#c7d0e6;line-height:1.75;}',
+  '.dshn8n-embed-text{white-space:pre-line;margin-bottom:12px;}',
   '.dshn8n-hint{font-size:11px;color:#8a93a6;padding:6px 12px;}',
   '.dshn8n-sess-head{display:flex;align-items:center;gap:8px;margin-bottom:6px;}',
   '.dshn8n-sess-goal{flex:1;min-width:0;font-size:12px;color:#c7d0e6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
@@ -127,7 +130,7 @@ function createHud() {
     editorBaseUrl: null,
     /** 当前展示的搭建会话（时间线）。 */
     session: null,
-    editor: { open: false, workflowId: null, autoReload: true, lastStamp: '' },
+    editor: { open: false, workflowId: null, autoReload: true, lastStamp: '', embeddable: null },
   }
 
   var statusDot = el('span', { class: 'dshn8n-dot wait' })
@@ -176,12 +179,22 @@ function createHud() {
   var autoBtn = el('button', { class: 'dshn8n-btn on', text: '自动刷新' })
   var openExternalBtn = el('button', { class: 'dshn8n-btn', text: '在系统浏览器打开' })
   var closeEditorBtn = el('button', { class: 'dshn8n-btn', text: '关闭' })
+
+  // n8n 可能禁止被内嵌（X-Frame-Options / CSP frame-ancestors）→ 用说明替代空白
+  var embedText = el('div', { class: 'dshn8n-embed-text', text: '' })
+  var embedOpenBtn = el('button', { class: 'dshn8n-btn primary', text: '在系统浏览器打开编辑器' })
+  var embedNotice = el('div', { class: 'dshn8n-embed-notice', style: 'display:none' }, [
+    embedText,
+    el('div', { class: 'dshn8n-row' }, [embedOpenBtn]),
+  ])
+
   var editorSection = el('div', { class: 'dshn8n-editor', style: 'display:none' }, [
     el('div', { class: 'dshn8n-editor-bar' }, [editorTitle, autoBtn, openExternalBtn, closeEditorBtn]),
     frame,
+    embedNotice,
     el('div', {
       class: 'dshn8n-hint',
-      text: '编辑器直接嵌入 n8n 页面；AI 每保存一次会自动刷新。要自己改就先关掉「自动刷新」，避免打断编辑。',
+      text: '若 n8n 允许被内嵌，这里会直接显示编辑器并随保存自动刷新；若不允许，会给出说明与外部打开入口。要自己改就先关掉「自动刷新」。',
     }),
   ])
 
@@ -253,6 +266,7 @@ function createHud() {
   }
 
   function loadFrame() {
+    if (state.editor.embeddable !== true) return
     var url = editorUrl(state.editor.workflowId)
     editorTitle.textContent = '编辑器 · ' + (state.editor.workflowId || '全部工作流')
     if (state.frameTimer) {
@@ -266,6 +280,41 @@ function createHud() {
       if (!state.editor.open) return
       frame.setAttribute('src', url)
     }, 60)
+  }
+
+  /** 根据探测结果决定：显示 iframe，还是显示「无法内嵌」的说明。 */
+  function applyEmbeddability(embeddable, reason) {
+    state.editor.embeddable = embeddable === true
+    frame.style.display = embeddable ? 'block' : 'none'
+    embedNotice.style.display = embeddable ? 'none' : 'block'
+    autoBtn.disabled = !embeddable
+    if (!embeddable) {
+      embedText.textContent =
+        '无法在浮窗里内嵌 n8n 编辑器。\n\n' +
+        (reason || 'n8n 未允许被内嵌。') +
+        '\n\n这不影响其他功能：工作流列表、搭建进度时间线、快照/回滚、触发都照常可用。' +
+        '点下面的按钮会在系统浏览器里打开这个工作流。'
+    }
+    if (embeddable) loadFrame()
+  }
+
+  /** 询问宿主：n8n 是否允许被内嵌（前端读不到跨域响应头，必须由服务端探测）。 */
+  function checkEmbed() {
+    frame.style.display = 'none'
+    embedNotice.style.display = 'block'
+    embedText.textContent = '正在检查 n8n 是否允许被内嵌…'
+    editorTitle.textContent = '编辑器 · ' + (state.editor.workflowId || '全部工作流')
+    var query = state.editor.workflowId
+      ? '?workflowId=' + encodeURIComponent(state.editor.workflowId)
+      : ''
+    NS.api('/embed-check' + query)
+      .then(function (r) {
+        if (r && r.ok) applyEmbeddability(r.embeddable === true, r.reason)
+        else applyEmbeddability(false, (r && r.error) || '探测失败')
+      })
+      .catch(function (e) {
+        applyEmbeddability(false, '探测失败：' + e.message)
+      })
   }
 
   /**
@@ -284,7 +333,7 @@ function createHud() {
     setCollapsed(false)
     if (!sameTarget) {
       state.editor.lastStamp = ''
-      loadFrame()
+      checkEmbed()
     } else {
       editorTitle.textContent = '编辑器 · ' + (target || '全部工作流')
     }
@@ -294,6 +343,7 @@ function createHud() {
   function closeEditor() {
     state.editor.open = false
     state.editor.workflowId = null
+    state.editor.embeddable = null
     editorSection.style.display = 'none'
     panel.classList.remove('wide')
     if (state.frameTimer) {
@@ -580,7 +630,7 @@ function createHud() {
 
   /** 编辑器打开时：目标工作流一变（AI 保存了新节点）就自动刷新 iframe。 */
   function autoReloadIfChanged(list) {
-    if (!state.editor.open || !state.editor.autoReload) return
+    if (!state.editor.open || !state.editor.autoReload || state.editor.embeddable !== true) return
     var id = state.editor.workflowId
     if (!id) return
     var cur = null
@@ -694,16 +744,20 @@ function createHud() {
   }
 
   autoBtn.onclick = function () {
+    if (state.editor.embeddable !== true) return
     state.editor.autoReload = !state.editor.autoReload
     autoBtn.className = 'dshn8n-btn' + (state.editor.autoReload ? ' on' : '')
     autoBtn.textContent = state.editor.autoReload ? '自动刷新' : '自动刷新已关'
     flash(state.editor.autoReload ? '已开启自动刷新' : '已关闭自动刷新（自己改时更安全）')
   }
 
-  openExternalBtn.onclick = function () {
+  function openInBrowser() {
     /* 桌面端主窗口会把这个 http 链接转交系统浏览器打开 */
     globalThis.open(editorUrl(state.editor.workflowId), '_blank')
   }
+
+  openExternalBtn.onclick = openInBrowser
+  embedOpenBtn.onclick = openInBrowser
 
   closeEditorBtn.onclick = function () {
     closeEditor()

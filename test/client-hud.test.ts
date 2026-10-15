@@ -228,6 +228,7 @@ describe('HUD 浮窗交互（真实 ui.js）', () => {
         if (path === '/workflows') return { ok: true, data: [] }
         if (path.startsWith('/executions')) return { ok: true, data: [] }
         if (path === '/focus') return { ok: true, rev, workflowId: rev > 0 ? 'wf-1' : null }
+        if (path.startsWith('/embed-check')) return { ok: true, embeddable: true }
         return { ok: true }
       }
     })
@@ -243,6 +244,7 @@ describe('HUD 浮窗交互（真实 ui.js）', () => {
 
     const frame = dom.all().find((n) => n.tag === 'iframe')
     const before = frame.src
+    expect(before).toContain('wf-1')
 
     // 同一目标、新 rev
     rev = 2
@@ -251,6 +253,59 @@ describe('HUD 浮窗交互（真实 ui.js）', () => {
     timers.flushTimeouts()
 
     expect(frame.src).toBe(before)
+  })
+
+  it('n8n 禁止内嵌时显示说明与外部打开入口，而不是一片空白（回归）', async () => {
+    const { dom } = mountHud({
+      api: async (path) => {
+        if (path === '/health') return { ok: true, configured: true, baseUrl: 'http://n8n.test', source: 'runtime' }
+        if (path === '/workflows') return { ok: true, data: [{ id: 'w1', name: 'wf', active: true, webhooks: [] }] }
+        if (path.startsWith('/executions')) return { ok: true, data: [] }
+        if (path === '/focus') return { ok: true, rev: 0, workflowId: null }
+        if (path.startsWith('/embed-check'))
+          return { ok: true, embeddable: false, reason: 'n8n 返回 X-Frame-Options: SAMEORIGIN，浏览器会拒绝在浮窗里渲染它' }
+        return { ok: true }
+      }
+    })
+    await flush()
+
+    byText(dom, '编辑').events.click()
+    await flush()
+
+    const frame = dom.all().find((n) => n.tag === 'iframe')
+    const notice = dom.all().find((n) => n.className === 'dshn8n-embed-notice')
+    expect(frame.style.display).toBe('none')
+    expect(notice.style.display).toBe('block')
+    const text = dom.all().find((n) => n.className === 'dshn8n-embed-text')
+    expect(text.textContent).toContain('X-Frame-Options')
+    expect(text.textContent).toContain('系统浏览器')
+    // 仍然提供外部打开入口
+    expect(dom.all().some((n) => n.tag === 'button' && n.textContent.includes('在系统浏览器打开编辑器'))).toBe(true)
+  })
+
+  it('n8n 允许内嵌时正常加载 iframe', async () => {
+    let rev = 0
+    const { dom, timers } = mountHud({
+      api: async (path) => {
+        if (path === '/health') return { ok: true, configured: true, baseUrl: 'http://n8n.test', source: 'runtime' }
+        if (path === '/workflows') return { ok: true, data: [] }
+        if (path.startsWith('/executions')) return { ok: true, data: [] }
+        if (path === '/focus') return { ok: true, rev, workflowId: rev > 0 ? 'wf-9' : null }
+        if (path.startsWith('/embed-check')) return { ok: true, embeddable: true }
+        return { ok: true }
+      }
+    })
+    await flush()
+    rev = 1
+    timers.intervals[0]()
+    await flush()
+    timers.flushTimeouts()
+
+    const frame = dom.all().find((n) => n.tag === 'iframe')
+    const notice = dom.all().find((n) => n.className === 'dshn8n-embed-notice')
+    expect(frame.style.display).toBe('block')
+    expect(notice.style.display).toBe('none')
+    expect(frame.src).toBe('http://n8n.test/workflow/wf-9')
   })
 
   it('编辑器链接使用宿主实际连接，而不是浏览器本地地址（回归）', async () => {
@@ -270,6 +325,7 @@ describe('HUD 浮窗交互（真实 ui.js）', () => {
         if (path === '/workflows') return { ok: true, data: [] }
         if (path.startsWith('/executions')) return { ok: true, data: [] }
         if (path === '/focus') return { ok: true, rev, workflowId: rev > 0 ? 'wf-1' : null }
+        if (path.startsWith('/embed-check')) return { ok: true, embeddable: true }
         return { ok: true }
       }
     })

@@ -195,6 +195,61 @@ export function registerHudRoutes(webServer: WebServerLike, deps: HudDeps): () =
           })
         }
 
+        // 探测 n8n 是否允许被内嵌（iframe 的 X-Frame-Options / CSP frame-ancestors）
+        //
+        // 为什么要在服务端探测：浮窗页面跑在自定义协议（桌面端是 dsh-app://app）上，
+        // 与 n8n 不同源；若 n8n 返回 X-Frame-Options 或限制 frame-ancestors，
+        // 浏览器会直接拒绝渲染 → 用户只会看到一片空白，且前端**无法**读取跨域响应头来判断原因。
+        if (sub === '/embed-check' && req.method === 'GET') {
+          const conn = manager.resolve()
+          if (!conn) {
+            return sendJson(res, 200, {
+              ok: false,
+              configured: false,
+              embeddable: false,
+              reason: '尚未配置 n8n 连接'
+            })
+          }
+          const workflowId = url.searchParams.get('workflowId')
+          const base = conn.baseUrl.replace(/\/+$/, '')
+          const target = workflowId
+            ? `${base}/workflow/${encodeURIComponent(workflowId)}`
+            : `${base}/home/workflows`
+          try {
+            // 必须用 GET：n8n 对 HEAD 返回 404，那种响应里没有安全头（曾因此误判为可内嵌）
+            const probe = await fetch(target, {
+              method: 'GET',
+              redirect: 'manual',
+              headers: { Accept: 'text/html' },
+              signal: AbortSignal.timeout(8000)
+            })
+            const xfo = probe.headers.get('x-frame-options') ?? ''
+            const csp = probe.headers.get('content-security-policy') ?? ''
+            const ancestors = /frame-ancestors([^;]*)/i.exec(csp)?.[1]?.trim() ?? ''
+
+            let reason: string | undefined
+            if (xfo) {
+              reason = `n8n 返回 X-Frame-Options: ${xfo}，浏览器会拒绝在浮窗里渲染它`
+            } else if (ancestors && ancestors !== '*' && !ancestors.split(/\s+/).includes('*')) {
+              reason = `n8n 的 CSP 限制了 frame-ancestors：${ancestors}`
+            }
+            return sendJson(res, 200, {
+              ok: true,
+              embeddable: !reason,
+              reason,
+              url: target,
+              status: probe.status
+            })
+          } catch (err) {
+            return sendJson(res, 200, {
+              ok: true,
+              embeddable: false,
+              reason: `无法探测 n8n 页面：${err instanceof Error ? err.message : String(err)}`,
+              url: target
+            })
+          }
+        }
+
         // 工作流列表（分页 + webhook 元数据）
         if (sub === '/workflows' && req.method === 'GET') {
           const limitRaw = Number(url.searchParams.get('limit') ?? '100')

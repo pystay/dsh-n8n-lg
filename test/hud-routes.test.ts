@@ -486,6 +486,84 @@ describe('HUD 校验与回滚路由', () => {
   })
 })
 
+describe('HUD 内嵌可行性探测（iframe 空白问题的根因）', () => {
+  it('n8n 返回 X-Frame-Options 时判定为不可内嵌，并说明原因', async () => {
+    const seen: Array<{ url: string; method: string }> = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: { method?: string }) => {
+        seen.push({ url: String(url), method: init?.method ?? 'GET' })
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: (k: string) => (k.toLowerCase() === 'x-frame-options' ? 'SAMEORIGIN' : null) }
+        }
+      })
+    )
+    const { getRoute } = captureRoute()
+    const res = fakeRes()
+    await getRoute().handler(
+      fakeReq({ url: `${HUD_ROUTE_PREFIX}/embed-check?workflowId=w1` }),
+      res
+    )
+    const body = JSON.parse(res.body)
+    expect(body.embeddable).toBe(false)
+    expect(body.reason).toContain('X-Frame-Options')
+    expect(body.reason).toContain('SAMEORIGIN')
+    // 关键：必须用 GET 探测 —— n8n 对 HEAD 返回 404，那种响应没有安全头（曾因此误判）
+    expect(seen[0]?.method).toBe('GET')
+    expect(seen[0]?.url).toBe('http://n8n.test/workflow/w1')
+  })
+
+  it('CSP 限制 frame-ancestors 时也判定为不可内嵌', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: {
+          get: (k: string) =>
+            k.toLowerCase() === 'content-security-policy' ? "frame-ancestors 'self'" : null
+        }
+      }))
+    )
+    const { getRoute } = captureRoute()
+    const res = fakeRes()
+    await getRoute().handler(fakeReq({ url: `${HUD_ROUTE_PREFIX}/embed-check` }), res)
+    const body = JSON.parse(res.body)
+    expect(body.embeddable).toBe(false)
+    expect(body.reason).toContain('frame-ancestors')
+  })
+
+  it('没有任何限制头时判定为可内嵌', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, headers: { get: () => null } }))
+    )
+    const { getRoute } = captureRoute()
+    const res = fakeRes()
+    await getRoute().handler(fakeReq({ url: `${HUD_ROUTE_PREFIX}/embed-check` }), res)
+    const body = JSON.parse(res.body)
+    expect(body.embeddable).toBe(true)
+    expect(body.reason).toBeUndefined()
+  })
+
+  it('探测失败时降级为不可内嵌（宁可给外部入口，也不留空白）', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('ECONNREFUSED')
+      })
+    )
+    const { getRoute } = captureRoute()
+    const res = fakeRes()
+    await getRoute().handler(fakeReq({ url: `${HUD_ROUTE_PREFIX}/embed-check` }), res)
+    const body = JSON.parse(res.body)
+    expect(body.embeddable).toBe(false)
+    expect(body.reason).toContain('无法探测')
+  })
+})
+
 describe('HUD 搭建会话路由（时间线 + 暂停控制）', () => {
   it('没有会话时返回 session:null（前端据此隐藏时间线）', async () => {
     const { getRoute } = captureRoute()
