@@ -272,12 +272,24 @@ export function registerTools(ctx: Context, manager: ConnectionManager, config: 
       name: 'n8n_delete_workflow',
       description:
         'Delete an n8n workflow (DELETE /api/v1/workflows/{id}). An active workflow must be deactivated first. ' +
-        'Consider n8n_snapshot_workflow first — deletion cannot be undone from here.',
+        'Deletion cannot be undone from here, so `confirm: true` is required. ' +
+        'Snapshot it first with n8n_snapshot_workflow if you might need it back.',
       parameters: {
-        workflowId: { type: 'string', required: true, description: 'The workflow ID.' }
+        workflowId: { type: 'string', required: true, description: 'The workflow ID.' },
+        confirm: {
+          type: 'boolean',
+          required: true,
+          description: 'Must be exactly true. A guard against deleting the wrong workflow by accident.'
+        }
       },
       output: jsonOutput,
       async execute(args) {
+        if (args.confirm !== true) {
+          throw new Error(
+            'n8n_delete_workflow 需要 confirm: true —— 删除不可撤销。' +
+              '如果不确定，先用 n8n_snapshot_workflow 留一份快照。'
+          )
+        }
         await manager.client().deleteWorkflow(args.workflowId)
         return asJson({ deleted: true, workflowId: args.workflowId })
       }

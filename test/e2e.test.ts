@@ -303,10 +303,29 @@ describe('E2E：工具 → ConnectionManager → N8nClient → n8n(本地复刻)
     }
     expect(deact.active).toBe(false)
 
-    const del = (await tools.get('n8n_delete_workflow')!.execute({ workflowId: id }, exec)) as {
+    const del = (await tools
+      .get('n8n_delete_workflow')!
+      .execute({ workflowId: id, confirm: true }, exec)) as {
       deleted: boolean
     }
     expect(del.deleted).toBe(true)
+  })
+
+  it('n8n_delete_workflow 没有 confirm:true 时拒绝执行（且不会真的删）', async () => {
+    const { tools, exec } = collectTools(makeConfig())
+    seed('w-guard', 'guard-me', [node('n1', 'A')])
+
+    // 缺参数
+    await expect(tools.get('n8n_delete_workflow')!.execute({ workflowId: 'w-guard' }, exec)).rejects.toThrow(
+      /confirm/
+    )
+    // 明确传 false 也不行
+    await expect(
+      tools.get('n8n_delete_workflow')!.execute({ workflowId: 'w-guard', confirm: false }, exec)
+    ).rejects.toThrow(/confirm/)
+
+    // 关键：被拒绝时工作流必须还在
+    expect(store.get('w-guard')).toBeTruthy()
   })
 
   it('n8n_retry_execution / n8n_stop_execution 正常返回', async () => {

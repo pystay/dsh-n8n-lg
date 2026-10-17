@@ -219,3 +219,56 @@ describe('N8nClient 工作流 CRUD（照搬 n8n）', () => {
     expect(calls[0]?.url).toBe('https://n8n.test/api/v1/executions/100/stop')
   })
 })
+
+describe('N8nClient 重试策略', () => {
+  // 退避设为 0，避免测试里真的等待
+  const retryOpts = { maxAttempts: 3, retryBackoffMs: 0 }
+
+  it('GET 遇 503 会重试，后续成功则正常返回', async () => {
+    let n = 0
+    const { client, calls } = makeClient(() => {
+      n += 1
+      return n === 1 ? jsonResponse('temporarily down', 503) : jsonResponse({ data: [], nextCursor: null })
+    }, retryOpts)
+
+    const res = await client.listWorkflows()
+    expect(res.data).toEqual([])
+    expect(calls).toHaveLength(2)
+  })
+
+  it('GET 遇 404 不重试（4xx 是调用方问题，重试无意义）', async () => {
+    const { client, calls } = makeClient(() => jsonResponse('nope', 404), retryOpts)
+    await expect(client.getWorkflow('missing')).rejects.toThrow(/404/)
+    expect(calls).toHaveLength(1)
+  })
+
+  it('POST 遇 503 不重试 —— 创建工作流重发会产生两份', async () => {
+    const { client, calls } = makeClient(() => jsonResponse('down', 503), retryOpts)
+    await expect(client.createWorkflow({ name: 'w', nodes: [], connections: {} })).rejects.toThrow(/503/)
+    expect(calls).toHaveLength(1)
+  })
+
+  it('DELETE 幂等，遇 5xx 会重试', async () => {
+    let n = 0
+    const { client, calls } = makeClient(() => {
+      n += 1
+      return n === 1 ? jsonResponse('down', 502) : jsonResponse('', 200)
+    }, retryOpts)
+    await client.deleteWorkflow('w1')
+    expect(calls).toHaveLength(2)
+  })
+
+  it('网络错误会重试，用尽次数后抛出原始错误', async () => {
+    const { client, calls } = makeClient(() => {
+      throw new TypeError('fetch failed')
+    }, retryOpts)
+    await expect(client.listWorkflows()).rejects.toThrow(/fetch failed/)
+    expect(calls).toHaveLength(3)
+  })
+
+  it('maxAttempts: 1 可完全关闭重试', async () => {
+    const { client, calls } = makeClient(() => jsonResponse('down', 503), { maxAttempts: 1 })
+    await expect(client.listWorkflows()).rejects.toThrow(/503/)
+    expect(calls).toHaveLength(1)
+  })
+})

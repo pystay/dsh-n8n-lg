@@ -1,6 +1,6 @@
 {
   "name": "dsh-n8n-lg",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Lightweight DeepSeek Harness (DSH) plugin: trigger, monitor and safely build n8n workflows from your AI agent.",
   "type": "module",
   "main": "lib/index.js",
@@ -17,8 +17,10 @@
   },
   "files": [
     "lib",
+    "examples",
     "cordis.patch.yml",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "keywords": [

@@ -28,6 +28,13 @@ export interface N8nClientOptions {
   webhookAuth?: { header: string; value: string }
   /** 请求超时（毫秒），默认 30000。 */
   timeoutMs?: number
+  /**
+   * 可重试请求的最大尝试次数（含首次），默认 3。设 1 即关闭重试。
+   * 只有 GET/PUT/DELETE 会重试 —— POST 不是幂等的，重发可能创建出两份。
+   */
+  maxAttempts?: number
+  /** 重试退避基数（毫秒），默认 300，按 3 倍递增（300 → 900）。 */
+  retryBackoffMs?: number
   /** 可注入的 fetch 实现（测试用）。 */
   fetchImpl?: typeof fetch
 }
@@ -96,6 +103,23 @@ export class N8nApiError extends Error {
 const DEFAULT_TIMEOUT_MS = 30_000
 const SAFE_METHOD = /^[A-Z]+$/
 
+/** 只有幂等方法可以安全重试。POST 重发可能创建出两份工作流。 */
+const RETRYABLE_METHODS = new Set(['GET', 'PUT', 'DELETE'])
+/** 值得重试的状态码：临时性故障。4xx 是调用方问题，重试无益。 */
+const RETRYABLE_STATUS = new Set([500, 502, 503, 504])
+const DEFAULT_MAX_ATTEMPTS = 3
+const DEFAULT_BACKOFF_MS = 300
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** 网络/超时错误一律可重试；HTTP 错误只有 5xx 才重试。 */
+function isRetryableError(err: unknown): boolean {
+  if (err instanceof N8nApiError) return RETRYABLE_STATUS.has(err.status)
+  return true
+}
+
 /** 把布尔值序列化为 n8n 期望的 'true'/'false' 字符串。 */
 function boolParam(value: boolean | undefined): string | undefined {
   return value === undefined ? undefined : String(value)
@@ -111,6 +135,8 @@ export class N8nClient {
   private readonly apiKey: string
   private readonly webhookAuth?: { header: string; value: string }
   private readonly timeoutMs: number
+  private readonly maxAttempts: number
+  private readonly retryBackoffMs: number
   private readonly fetchImpl: typeof fetch
 
   constructor(options: N8nClientOptions) {
@@ -120,6 +146,8 @@ export class N8nClient {
     this.apiKey = options.apiKey
     this.webhookAuth = options.webhookAuth
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
+    this.maxAttempts = Math.max(1, options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS)
+    this.retryBackoffMs = Math.max(0, options.retryBackoffMs ?? DEFAULT_BACKOFF_MS)
     this.fetchImpl = options.fetchImpl ?? fetch
   }
 
@@ -327,6 +355,7 @@ export class N8nClient {
   // ---------------- internals ----------------
 
   private async request<T>(path: string, init: RequestInitLite = {}): Promise<T> {
+    const method = init.method ?? 'GET'
     const headers: Record<string, string> = {
       'X-N8N-API-KEY': this.apiKey,
       Accept: 'application/json'
@@ -336,8 +365,32 @@ export class N8nClient {
       headers['Content-Type'] = 'application/json'
       body = JSON.stringify(init.body)
     }
+
+    // 只有幂等方法重试；POST（创建工作流、重试执行…）重发会产生第二份。
+    const attempts = RETRYABLE_METHODS.has(method) ? this.maxAttempts : 1
+    let lastError: unknown
+
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        return await this.send<T>(path, method, headers, body)
+      } catch (err) {
+        lastError = err
+        if (attempt >= attempts || !isRetryableError(err)) throw err
+        await sleep(this.retryBackoffMs * 3 ** (attempt - 1))
+      }
+    }
+    throw lastError
+  }
+
+  /** 单次发送（不含重试逻辑）。 */
+  private async send<T>(
+    path: string,
+    method: string,
+    headers: Record<string, string>,
+    body: string | undefined
+  ): Promise<T> {
     const res = await this.fetchImpl(`${this.base}${path}`, {
-      method: init.method ?? 'GET',
+      method,
       headers,
       body,
       signal: AbortSignal.timeout(this.timeoutMs)

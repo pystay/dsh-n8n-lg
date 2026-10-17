@@ -1,0 +1,37 @@
+{
+  "name": "Hello Webhook (example)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "hello-example",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "wh-1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "hello-example"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// 把收到的请求原样回显，并加一句问候。\n// 用 n8n_trigger_workflow 触发时，payload 会落在 $json.body 上。\nconst body = $json.body ?? {};\nreturn [\n  {\n    json: {\n      ok: true,\n      greeting: `你好，${body.name || '世界'}`,\n      receivedAt: new Date().toISOString(),\n      body,\n    },\n  },\n];"
+      },
+      "id": "code-1",
+      "name": "Greet",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Greet", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {},
+  "active": false
+}

@@ -118,6 +118,29 @@ dsh plugin --profile desktop add dsh-n8n-lg
 
 ---
 
+## 试一下（示例工作流）
+
+[`examples/hello-webhook.json`](./examples/hello-webhook.json) 是一个最小可跑的工作流：
+Webhook 收到 POST → Code 节点回显 → 返回 JSON。零凭据依赖，用来确认「装好了、能跑通」。
+
+让 Agent 依次做三件事：
+
+```
+1. n8n_create_workflow   —— 把 examples/hello-webhook.json 的内容作为 workflow 参数
+2. n8n_activate_workflow —— 激活后等 3–5 秒（n8n 注册 webhook 是异步的）
+3. n8n_trigger_workflow  —— webhookPath = "hello-example"，payload = {"name": "n8n"}
+```
+
+期望返回：
+
+```json
+{ "ok": true, "greeting": "你好，n8n", "receivedAt": "...", "body": { "name": "n8n" } }
+```
+
+也可以在 n8n 界面里 **Workflows → Import from File** 直接导入这个 JSON。
+
+---
+
 ## 提供的工具（21 个）
 
 | 工具 | 对应 n8n 接口 |
@@ -126,7 +149,7 @@ dsh plugin --profile desktop add dsh-n8n-lg
 | `n8n_get_workflow` | `GET /api/v1/workflows/{id}` |
 | `n8n_create_workflow` | `POST /api/v1/workflows`（写前校验） |
 | `n8n_update_workflow` | `PUT /api/v1/workflows/{id}`（自动补全必填字段，默认存草稿） |
-| `n8n_delete_workflow` | `DELETE /api/v1/workflows/{id}` |
+| `n8n_delete_workflow` | `DELETE /api/v1/workflows/{id}`（**必须传 `confirm: true`**，删除不可撤销） |
 | `n8n_activate_workflow` | `POST /api/v1/workflows/{id}/publish`（回退 `/activate`） |
 | `n8n_deactivate_workflow` | `POST /api/v1/workflows/{id}/deactivate` |
 | `n8n_trigger_workflow` | 请求 `{n8n}/webhook/{path}`（支持 method / query / payload） |
@@ -271,7 +294,12 @@ dsh plugin --profile desktop add dsh-n8n-lg
     `X-Frame-Options: SAMEORIGIN`，而浮窗跑在自定义协议（`dsh-app://app`）上、与 n8n 不同源，
     所以浏览器会拒绝渲染那个 iframe。浮窗现在会**先探测**并改为提示你在系统浏览器打开编辑器；
     工作流列表、搭建进度时间线、快照/回滚、触发**都不受影响**。
-16. **实测环境**：Windows + DSH 桌面端 + n8n 2.43.5。其他平台/版本我还没条件验证，欢迎反馈。
+16. **自动重试**：`GET` / `PUT` / `DELETE` 遇到 5xx 或网络错误会自动重试（默认最多 3 次）。
+    **`POST` 不重试** —— 创建工作流这类请求重发会多出一份，宁可失败让你重来。
+17. **看执行细节要显式开 `includeData`**：`n8n_get_execution_status` / `n8n_list_executions`
+    默认只返回概要。想看每个节点输出了什么，传 `includeData: true`
+    （数据太大时再配 `ignoreDataSizeLimit`；含敏感数据时用 `redactExecutionData`）。
+18. **实测环境**：Windows + DSH 桌面端 + n8n 2.43.5。其他平台/版本我还没条件验证，欢迎反馈。
 
 ---
 
