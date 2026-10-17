@@ -45,27 +45,39 @@ DSH 桌面端（Electron）启动的是 **`$DSH_HOME/profiles/desktop`** 这个 
 
 | | 版本 | 凭据文件格式 | 位置 |
 |---|---|---|---|
-| **DSH 桌面端内置** | `0.2.0-rc.2` | 嵌套：`version: 1`(数字) + `refs:` + `records:` | `D:\DeepSeek_Harness\resources\extracted-app\dsh` |
+| **DSH 桌面端内置** | `0.2.1-rc.2` | 嵌套：`version: 1`(数字) + `refs:` + `records:` | `D:\DeepSeek_Harness\resources\app.asar`（打包，不再解包到 `extracted-app`） |
 | **全局 npm `dsh`** | `0.1.0-rc.7` | 扁平：直接 `KEY: value` | `%APPDATA%\npm\node_modules\@deepseek-ai\dsh` |
+
+> **0.2.1-rc.2 的结构变化**（2026-10-17 实测）：
+> - 核心从 `resources/extracted-app/`（可直接读文件）改为打进 `resources/app.asar`（182 MB，asar 不压缩，可按索引寻址）；
+> - 包名 `@deepseek-ai/dsh` → **`@deepseek-ai/dsh-desktop-host`**，入口从 `lib/bin.js` → `lib/cli.js`；
+> - 运行时不再用独立 `node.exe`，而是 `DeepSeek Harness.exe` + `ELECTRON_RUN_AS_NODE=1`；
+> - 官方已封装好入口：`resources/runtime/cli/bin/dsh.cmd`（下面的复现命令改用它）。
 
 **影响**：`~/.dsh/.credentials.yaml` 是桌面端（新版）写的嵌套格式，**旧的全局 dsh 读不了**（会报 `version must be a string`）。因此：
 - 用全局 `dsh` 只能做 `plugin add` 等不需要凭据的操作；
-- 要**真实启动/运行**（跑 agent），必须用**桌面端内置的运行时**。
+- 要**真实启动/运行**（跑 agent），必须用**桌面端自带的 CLI**。
 
-复现命令（用桌面端运行时）：
+复现命令（0.2.1-rc.2 起）：
 ```
-NODE="D:/DeepSeek_Harness/resources/runtime/primary-runtime/dependencies/node/bin/node.exe"
-DSHBIN="D:/DeepSeek_Harness/resources/extracted-app/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
+DSH="D:/DeepSeek_Harness/resources/runtime/cli/bin/dsh.cmd"
 N8N_BASE_URL=http://127.0.0.1:5678 N8N_API_KEY=<key> \
 NO_PROXY=127.0.0.1,localhost \
-"$NODE" "$DSHBIN" --profile headless "<你的任务>"
+"$DSH" --profile headless "<你的任务>"
 ```
+
+> 旧版（0.2.0-rc.2）的写法，仅供对照：
+> `"$NODE" "$DSHBIN" --profile headless "<任务>"`，其中
+> `DSHBIN=.../extracted-app/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js` —— **该路径在 0.2.1-rc.2 已不存在**。
 
 ---
 
 ## 四、注意事项
 
-1. **依赖版本差异（低风险，实测兼容）**：桌面端 `@deepseek-ai/dsh-tools` 为 `0.2.0-rc.2`，插件本地 devDep 为 `0.0.1-rc.1`；`cordis`/`schemastery` 一致。实测工具注册与调用均正常。后续可考虑对齐 devDep 版本。
+1. **依赖版本**：0.2.1-rc.2 里 `@deepseek-ai/dsh-tools` 已是 `0.2.1-rc.2`（插件 devDep 仍写 `0.0.1-rc.1`）。
+   已实测**契约兼容**：`defineTool` 返回对象仍含 `name / description / parameters / output / execute`，
+   `parameters` 会被规范化为 JSON Schema（`required` 保留），`execute` 调用正常。
+   `cordis` 4.0.5、`schemastery` 3.18.5，与插件声明同 major。
 2. **`NO_PROXY` 必须设**：本机环境 `http_proxy` 会拦截 localhost，否则插件请求 `127.0.0.1:5678` 会失败。
 3. **GUI 无法从本会话启动**：桌面端窗口需你手动双击 `D:\DeepSeek_Harness\DeepSeek Harness.exe`；本会话的沙箱不允许起 GUI 进程。
 4. **演示用的 `headless` profile**：为跑演示，向 `~/.dsh/profiles/headless` 装了本插件（附加，不影响 `desktop`）。如不需要可 `dsh plugin --profile headless remove dsh-n8n-lg`。

@@ -305,7 +305,8 @@ Webhook 收到 POST → Code 节点回显 → 返回 JSON。零凭据依赖，�
 17. **看执行细节要显式开 `includeData`**：`n8n_get_execution_status` / `n8n_list_executions`
     默认只返回概要。想看每个节点输出了什么，传 `includeData: true`
     （数据太大时再配 `ignoreDataSizeLimit`；含敏感数据时用 `redactExecutionData`）。
-18. **实测环境**：Windows + DSH 桌面端 + n8n 2.43.5。其他平台/版本我还没条件验证，欢迎反馈。
+18. **实测环境**：Windows + DSH 桌面端 **0.2.1-rc.2**（上一版 0.2.0-rc.2 也验证过）+ n8n 2.43.5。
+    其他平台/版本我还没条件验证，欢迎反馈。
 
 ---
 

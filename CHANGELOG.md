@@ -3,7 +3,28 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [0.4.0] - 未发布
+## [0.4.1] - 2026-10-17
+
+适配 DSH 桌面端 **0.2.1-rc.2**（上一版 0.2.0-rc.2 仍然兼容）。
+
+### 修复
+
+- **`JsonValue` 不再从 `@deepseek-ai/dsh-tools` 导出** —— 0.2.1-rc.2 把它挪到了
+  `dsh-util-values`，`tsc` 直接报 `TS2614: has no exported member 'JsonValue'`。
+  现在插件**自带这份类型定义**（标准递归 JSON 联合，与 DSH 的完全同构）：
+  既不再依赖 dsh 的内部实现包（`dsh-util-values` 只是 `dsh-tools` 的传递依赖，
+  pnpm 隔离布局下直接 import 不可靠），也同时兼容新旧两版 DSH。
+
+### 变更
+
+- devDependencies 对齐桌面端：`cordis` 4.0.5 / `dsh-tools` 0.2.1-rc.2 / `schemastery` 3.18.5
+  （此前为 4.0.4 / 0.0.1-rc.1 / 3.18.4）。换用新版类型跑 `tsc`、并用新版运行时跑全部
+  249 个测试，均通过。
+- 文档：0.2.1-rc.2 把核心打进 `resources/app.asar`（不再解包到 `extracted-app`），
+  包名 `@deepseek-ai/dsh` → **`@deepseek-ai/dsh-desktop-host`**，入口 `lib/bin.js` → `lib/cli.js`，
+  CLI 统一走 `resources/runtime/cli/bin/dsh.cmd`。`docs/演示-DSH调用n8n工具.md` 已更新。
+
+## [0.4.0] - 2026-10-17
 
 ### 变更（会影响现有调用方式）
 
