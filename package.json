@@ -53,6 +53,7 @@
     "build": "tsc -p tsconfig.json && node scripts/build-client.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "coverage": "vitest run --coverage",
     "e2e:real": "node scripts/e2e-real.mjs",
     "scan:workflows": "node scripts/scan-workflow-nodes.mjs",
     "prepublishOnly": "npm run build && npm test"
@@ -71,15 +72,22 @@
     "@deepseek-ai/schemastery": "*"
   },
   "peerDependenciesMeta": {
-    "@deepseek-ai/cordis": { "optional": true },
-    "@deepseek-ai/dsh-tools": { "optional": true },
-    "@deepseek-ai/schemastery": { "optional": true }
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
     "@deepseek-ai/dsh-tools": "^0.0.1-rc.1",
     "@deepseek-ai/schemastery": "^3.18.4",
     "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^2.1.9",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
   }

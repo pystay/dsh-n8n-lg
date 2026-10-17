@@ -20,6 +20,13 @@
 - `examples/hello-webhook.json`：可直接导入的最小示例（Webhook → Code），
   零凭据依赖，用来确认「装好了、能跑通」。
 
+### 工程
+
+- 接入测试覆盖率（`npm run coverage`）。首次接入就发现 **`src/config.ts`、
+  `src/index.ts`、`src/tools/sandbox.ts` 是 0%** —— 插件装配路径（schema 默认值、
+  `apply()` 注册了什么、沙箱工具挂没挂上）完全没有回归保护。已补 14 个测试，
+  行覆盖 **88.79% → 94.75%**，测试 204 → 218。
+
 ## [0.3.0] - 2026-10-16
 
 ### 新增

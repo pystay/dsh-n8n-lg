@@ -317,9 +317,14 @@ Webhook 收到 POST → Code 节点回显 → 返回 JSON。零凭据依赖，�
 
 ```sh
 npm install
-npm test          # 单元测试（vitest）
-npm run build     # 编译 TS + 打包客户端 bundle 到 lib/
+npm test              # 单元测试（vitest，218 个用例）
+npm run coverage      # 测试覆盖率（当前行覆盖 94.75%）
+npm run build         # 编译 TS + 打包客户端 bundle 到 lib/
+npm run e2e:real      # 对真实 n8n 跑端到端（需 N8N_BASE_URL / N8N_API_KEY）
 ```
+
+> `src/client/*.js` 不计入覆盖率 —— 它会被打包成 `lib/client.js`，
+> 浮窗测试跑的是打包产物，源码行号对不上，计进去只会得到假数字。
 
 ---
 
