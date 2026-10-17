@@ -12,6 +12,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ConnectionManager } from '../connection.js'
 import { normalizeBaseUrl } from '../connection.js'
 import { N8nApiError } from '../n8n/client.js'
+import { buildCanvas } from '../n8n/canvas.js'
 import { analyzeCredentials } from '../n8n/credentials.js'
 import { WorkflowEditor, validateWorkflow } from '../n8n/editor.js'
 import { isWebhookPathAllowed } from '../n8n/guard.js'
@@ -396,6 +397,22 @@ export function registerHudRoutes(webServer: WebServerLike, deps: HudDeps): () =
           const base = manager.resolve()?.baseUrl.replace(/\/+$/, '')
           const report = analyzeCredentials(wf.nodes, available, base ? `${base}/home/credentials` : undefined)
           return sendJson(res, 200, { ...report, scopeWarning })
+        }
+
+        // 画布数据：n8n 拒绝被 iframe 内嵌（X-Frame-Options），浮窗改为自绘。
+        // 只回节点坐标/短类型/连线，不带节点参数（可能含 URL、内联数据）。
+        const canvasMatch = /^\/workflows\/([^/]+)\/canvas$/.exec(sub)
+        if (canvasMatch && req.method === 'GET') {
+          const id = decodeURIComponent(canvasMatch[1] as string)
+          const wf = await manager.client().getWorkflow(id)
+          const graph = buildCanvas(wf)
+          const name = (wf as unknown as { name?: unknown }).name
+          return sendJson(res, 200, {
+            ok: true,
+            workflowId: id,
+            name: typeof name === 'string' ? name : '',
+            ...graph
+          })
         }
 
         // 启用 / 停用工作流

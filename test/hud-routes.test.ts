@@ -696,3 +696,83 @@ describe('HUD 凭据向导路由', () => {
     expect(body.missing[0].credentialType).toBe('googleSheetsOAuth2Api')
   })
 })
+
+describe('HUD 画布路由（n8n 拒绝内嵌时的替代）', () => {
+  it('返回节点坐标与连线，且不泄漏节点参数', async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        id: 'w1',
+        name: 'my wf',
+        nodes: [
+          {
+            name: 'Webhook',
+            type: 'n8n-nodes-base.webhook',
+            position: [0, 0],
+            parameters: { path: 'p' }
+          },
+          {
+            name: 'Code',
+            type: 'n8n-nodes-base.code',
+            position: [220, 0],
+            parameters: { jsCode: 'SECRET_JS_SHOULD_NOT_LEAK' }
+          }
+        ],
+        connections: { Webhook: { main: [[{ node: 'Code', type: 'main', index: 0 }]] } }
+      })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { getRoute } = captureRoute()
+    const res = fakeRes()
+    await getRoute().handler(
+      fakeReq({ method: 'GET', url: `${HUD_ROUTE_PREFIX}/workflows/w1/canvas` }),
+      res
+    )
+
+    const body = JSON.parse(res.body) as {
+      ok: boolean
+      name: string
+      nodes: Array<{ kind: string }>
+      edges: unknown[]
+    }
+    expect(res.statusCode).toBe(200)
+    expect(body.ok).toBe(true)
+    expect(body.name).toBe('my wf')
+    expect(body.nodes).toHaveLength(2)
+    expect(body.nodes[0]?.kind).toBe('webhook')
+    expect(body.edges).toEqual([{ from: 'Webhook', to: 'Code', channel: 'main' }])
+    // 画布只要坐标，节点参数（可能含内联数据）不能带出来
+    expect(res.body).not.toContain('SECRET_JS_SHOULD_NOT_LEAK')
+    expect(fetchMock.mock.calls[0]?.[0]).toContain('/api/v1/workflows/w1')
+  })
+
+  it('工作流不存在时返回结构化错误（不是 500 崩掉）', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ message: 'Not Found' }, 404)))
+    const { getRoute } = captureRoute()
+    const res = fakeRes()
+    await getRoute().handler(
+      fakeReq({ method: 'GET', url: `${HUD_ROUTE_PREFIX}/workflows/nope/canvas` }),
+      res
+    )
+    const body = JSON.parse(res.body) as { ok: boolean; error?: string }
+    expect(body.ok).toBe(false)
+    expect(String(body.error)).toMatch(/404|Not Found/)
+  })
+
+  it('空工作流返回空图而不是报错', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse({ id: 'w2', name: 'empty', nodes: [], connections: {} }))
+    )
+    const { getRoute } = captureRoute()
+    const res = fakeRes()
+    await getRoute().handler(
+      fakeReq({ method: 'GET', url: `${HUD_ROUTE_PREFIX}/workflows/w2/canvas` }),
+      res
+    )
+    const body = JSON.parse(res.body) as { ok: boolean; nodes: unknown[]; edges: unknown[] }
+    expect(body.ok).toBe(true)
+    expect(body.nodes).toEqual([])
+    expect(body.edges).toEqual([])
+  })
+})

@@ -64,6 +64,15 @@ var CSS = [
   '.dshn8n-editor-bar .t{flex:1;font-size:12px;color:#c7d0e6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
   '.dshn8n-frame{width:100%;height:min(56vh,520px);border:0;background:#0b0d16;display:block;}',
   '.dshn8n-embed-notice{padding:20px 16px;font-size:12.5px;color:#c7d0e6;line-height:1.75;}',
+  '.dshn8n-canvasbox{background:rgba(10,12,20,.55);border:1px solid rgba(255,255,255,.07);border-radius:10px;padding:8px;margin:6px 0;overflow:auto;}',
+  '.dshn8n-canvas{width:100%;height:auto;max-height:min(48vh,420px);display:block;}',
+  '.dshn8n-canvas .dshn8n-edge{fill:none;stroke:rgba(150,170,220,.55);stroke-width:1.6;}',
+  '.dshn8n-canvas .dshn8n-edge.alt{stroke:rgba(255,194,71,.6);stroke-dasharray:5 4;}',
+  '.dshn8n-canvas .dshn8n-node rect{fill:rgba(38,46,70,.95);stroke:rgba(120,150,220,.45);stroke-width:1.2;}',
+  '.dshn8n-canvas .dshn8n-node.disabled rect{fill:rgba(38,46,70,.45);stroke-dasharray:4 3;}',
+  '.dshn8n-canvas .dshn8n-node text.nm{fill:#e8eeff;font-size:12px;font-weight:600;}',
+  '.dshn8n-canvas .dshn8n-node text.kind{fill:#8f9cba;font-size:10px;}',
+  '.dshn8n-canvas .dshn8n-node.disabled text{opacity:.55;}',
   '.dshn8n-embed-text{white-space:pre-line;margin-bottom:12px;}',
   '.dshn8n-hint{font-size:11px;color:#8a93a6;padding:6px 12px;}',
   '.dshn8n-sess-head{display:flex;align-items:center;gap:8px;margin-bottom:6px;}',
@@ -188,13 +197,19 @@ function createHud() {
     el('div', { class: 'dshn8n-row' }, [embedOpenBtn]),
   ])
 
+  // 内嵌不了 n8n 时改为自绘画布（只用节点坐标+连线，不依赖 iframe）
+  var canvasBox = el('div', { class: 'dshn8n-canvasbox', style: 'display:none' })
+  var canvasNote = el('div', { class: 'dshn8n-hint', text: '' })
+
   var editorSection = el('div', { class: 'dshn8n-editor', style: 'display:none' }, [
     el('div', { class: 'dshn8n-editor-bar' }, [editorTitle, autoBtn, openExternalBtn, closeEditorBtn]),
     frame,
     embedNotice,
+    canvasBox,
+    canvasNote,
     el('div', {
       class: 'dshn8n-hint',
-      text: '若 n8n 允许被内嵌，这里会直接显示编辑器并随保存自动刷新；若不允许，会给出说明与外部打开入口。要自己改就先关掉「自动刷新」。',
+      text: 'n8n 允许内嵌时这里直接显示编辑器；不允许时改为只读画布（能看到节点与连线，改还是要打开系统浏览器）。要自己改就先关掉「自动刷新」。',
     }),
   ])
 
@@ -283,19 +298,162 @@ function createHud() {
   }
 
   /** 根据探测结果决定：显示 iframe，还是显示「无法内嵌」的说明。 */
+  // ---- 只读画布：n8n 拒绝被 iframe 内嵌时的替代方案 ----
+  var SVG_NS = 'http://www.w3.org/2000/svg'
+  var NODE_W = 132
+  var NODE_H = 48
+  var CANVAS_PAD = 18
+
+  function svgEl(tag, attrs) {
+    var node = document.createElementNS(SVG_NS, tag)
+    if (attrs) {
+      for (var k in attrs) {
+        if (Object.prototype.hasOwnProperty.call(attrs, k)) node.setAttribute(k, String(attrs[k]))
+      }
+    }
+    return node
+  }
+
+  function clipText(text, max) {
+    var s = String(text == null ? '' : text)
+    return s.length > max ? s.slice(0, max - 1) + '…' : s
+  }
+
+  /** 把 /canvas 返回的图渲染成只读 SVG。纯展示，不绑定任何编辑动作。 */
+  function renderCanvas(graph) {
+    canvasBox.textContent = ''
+    var nodes = (graph && graph.nodes) || []
+    var edges = (graph && graph.edges) || []
+
+    if (!nodes.length) {
+      canvasBox.appendChild(el('div', { class: 'dshn8n-hint', text: '这个工作流还没有节点。' }))
+      canvasNote.textContent = ''
+      return
+    }
+
+    var byName = {}
+    var minX = Infinity
+    var minY = Infinity
+    var maxX = -Infinity
+    var maxY = -Infinity
+    nodes.forEach(function (n) {
+      byName[n.name] = n
+      if (n.x < minX) minX = n.x
+      if (n.y < minY) minY = n.y
+      if (n.x > maxX) maxX = n.x
+      if (n.y > maxY) maxY = n.y
+    })
+
+    var vbW = Math.max(NODE_W, maxX - minX + NODE_W) + CANVAS_PAD * 2
+    var vbH = Math.max(NODE_H, maxY - minY + NODE_H) + CANVAS_PAD * 2
+
+    var svg = svgEl('svg', {
+      class: 'dshn8n-canvas',
+      viewBox: '0 0 ' + vbW + ' ' + vbH,
+      preserveAspectRatio: 'xMidYMid meet',
+      role: 'img',
+      'aria-label': '工作流画布（只读）',
+    })
+
+    // 连线画在底层
+    edges.forEach(function (e) {
+      var from = byName[e.from]
+      var to = byName[e.to]
+      if (!from || !to) return
+      var x1 = from.x - minX + CANVAS_PAD + NODE_W
+      var y1 = from.y - minY + CANVAS_PAD + NODE_H / 2
+      var x2 = to.x - minX + CANVAS_PAD
+      var y2 = to.y - minY + CANVAS_PAD + NODE_H / 2
+      var dx = Math.max(28, Math.abs(x2 - x1) * 0.5)
+      svg.appendChild(
+        svgEl('path', {
+          class: 'dshn8n-edge' + (e.channel === 'main' ? '' : ' alt'),
+          d:
+            'M' + x1 + ',' + y1 +
+            ' C' + (x1 + dx) + ',' + y1 +
+            ' ' + (x2 - dx) + ',' + y2 +
+            ' ' + x2 + ',' + y2,
+        })
+      )
+    })
+
+    // 节点画在上层
+    nodes.forEach(function (n) {
+      var x = n.x - minX + CANVAS_PAD
+      var y = n.y - minY + CANVAS_PAD
+      var g = svgEl('g', { class: 'dshn8n-node' + (n.disabled ? ' disabled' : '') })
+
+      var title = svgEl('title')
+      title.textContent = n.name + '\n' + n.type + (n.disabled ? '（已禁用）' : '')
+      g.appendChild(title)
+
+      g.appendChild(svgEl('rect', { x: x, y: y, width: NODE_W, height: NODE_H, rx: 11 }))
+
+      var nm = svgEl('text', { x: x + 10, y: y + 20, class: 'nm' })
+      nm.textContent = clipText(n.name, 15)
+      g.appendChild(nm)
+
+      var kind = svgEl('text', { x: x + 10, y: y + 36, class: 'kind' })
+      kind.textContent = clipText(n.kind, 18)
+      g.appendChild(kind)
+
+      svg.appendChild(g)
+    })
+
+    canvasBox.appendChild(svg)
+
+    var extra = []
+    if (graph.danglingEdges) {
+      extra.push(graph.danglingEdges + ' 条连线指向不存在的节点（未画出）')
+    }
+    var others = edges.filter(function (e) {
+      return e.channel !== 'main'
+    }).length
+    if (others) extra.push(others + ' 条 AI 通道连线（虚线）')
+
+    canvasNote.textContent =
+      nodes.length + ' 个节点 · ' + edges.length + ' 条连线' +
+      (extra.length ? ' · ' + extra.join(' · ') : '')
+  }
+
+  function hideCanvas() {
+    canvasBox.style.display = 'none'
+    canvasBox.textContent = ''
+    canvasNote.textContent = ''
+  }
+
+  function loadCanvas(workflowId) {
+    canvasBox.style.display = 'block'
+    canvasBox.textContent = ''
+    canvasNote.textContent = '正在读取画布…'
+    NS.api('/workflows/' + encodeURIComponent(workflowId) + '/canvas')
+      .then(function (r) {
+        if (r && r.ok) renderCanvas(r)
+        else canvasNote.textContent = '画布读取失败：' + ((r && r.error) || '未知错误')
+      })
+      .catch(function (e) {
+        canvasNote.textContent = '画布读取失败：' + e.message
+      })
+  }
+
   function applyEmbeddability(embeddable, reason) {
     state.editor.embeddable = embeddable === true
     frame.style.display = embeddable ? 'block' : 'none'
     embedNotice.style.display = embeddable ? 'none' : 'block'
     autoBtn.disabled = !embeddable
-    if (!embeddable) {
-      embedText.textContent =
-        '无法在浮窗里内嵌 n8n 编辑器。\n\n' +
-        (reason || 'n8n 未允许被内嵌。') +
-        '\n\n这不影响其他功能：工作流列表、搭建进度时间线、快照/回滚、触发都照常可用。' +
-        '点下面的按钮会在系统浏览器里打开这个工作流。'
+    if (embeddable) {
+      hideCanvas()
+      loadFrame()
+      return
     }
-    if (embeddable) loadFrame()
+    embedText.textContent =
+      '无法在浮窗里内嵌 n8n 编辑器。\n\n' +
+      (reason || 'n8n 未允许被内嵌。') +
+      '\n\n下面是用节点坐标自己画的只读画布；要修改请点「在系统浏览器打开」。' +
+      '其余功能（工作流列表、搭建进度、快照/回滚、触发）都不受影响。'
+    // 有具体工作流就画出来 —— 至少让用户看见结构，而不是盯着一句说明
+    if (state.editor.workflowId) loadCanvas(state.editor.workflowId)
+    else hideCanvas()
   }
 
   /** 询问宿主：n8n 是否允许被内嵌（前端读不到跨域响应头，必须由服务端探测）。 */
@@ -346,6 +504,7 @@ function createHud() {
     state.editor.embeddable = null
     editorSection.style.display = 'none'
     panel.classList.remove('wide')
+    hideCanvas()
     if (state.frameTimer) {
       clearTimeout(state.frameTimer)
       state.frameTimer = null

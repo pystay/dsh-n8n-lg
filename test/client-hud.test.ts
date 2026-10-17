@@ -93,6 +93,8 @@ function makeDom() {
     head,
     body,
     createElement: (tag) => new FakeElement(tag),
+    // 只读画布用 SVG（createElementNS），这里同样返回 FakeElement 以便断言结构
+    createElementNS: (_ns, tag) => new FakeElement(tag),
     getElementById: (id) => [...walk(head), ...walk(body)].find((n) => n.attrs.id === id)
   }
   return { document, head, body, all: () => [...walk(head), ...walk(body)] }
@@ -626,5 +628,69 @@ describe('HUD 数据层（真实 store.js）', () => {
   it('默认地址仅在本地无配置时用于回填', () => {
     const { NS } = mountStore(async () => ({ ok: true, status: 200, text: async () => '{}' }))
     expect(NS.loadConfig()).toEqual({ baseUrl: 'http://127.0.0.1:5678', apiKey: '' })
+  })
+})
+
+describe('只读画布（n8n 拒绝被 iframe 内嵌时的替代）', () => {
+  function canvasApi(canvasPayload) {
+    return async (path) => {
+      if (path === '/health') {
+        return { ok: true, configured: true, baseUrl: 'http://n8n.test', source: 'runtime' }
+      }
+      if (path === '/workflows') return { ok: true, data: [] }
+      if (path.startsWith('/executions')) return { ok: true, data: [] }
+      if (path === '/focus') return { ok: true, rev: 1, workflowId: 'wf-1' }
+      if (path.startsWith('/embed-check')) {
+        return { ok: true, embeddable: false, reason: 'n8n 返回 X-Frame-Options: SAMEORIGIN' }
+      }
+      if (path === '/workflows/wf-1/canvas') return canvasPayload
+      return { ok: true }
+    }
+  }
+
+  const twoNodes = {
+    ok: true,
+    workflowId: 'wf-1',
+    name: 'demo',
+    nodes: [
+      { id: 'n1', name: 'Webhook', type: 'n8n-nodes-base.webhook', kind: 'webhook', x: 0, y: 0, disabled: false },
+      { id: 'n2', name: 'Code', type: 'n8n-nodes-base.code', kind: 'code', x: 220, y: 0, disabled: false }
+    ],
+    edges: [{ from: 'Webhook', to: 'Code', channel: 'main' }],
+    danglingEdges: 0
+  }
+
+  it('内嵌被拒时画出节点与连线，而不是留一句说明', async () => {
+    const { dom, timers } = mountHud({ api: canvasApi(twoNodes) })
+    await flush()
+    timers.intervals[0]()
+    await flush(30)
+
+    const svg = dom.all().find((n) => n.tag === 'svg')
+    expect(svg).toBeTruthy()
+    // 先画连线（path）再画节点（g）
+    expect(svg.children.filter((c) => c.tag === 'path')).toHaveLength(1)
+    expect(svg.children.filter((c) => c.tag === 'g')).toHaveLength(2)
+  })
+
+  it('空工作流显示提示，不生成空 SVG', async () => {
+    const { dom, timers } = mountHud({
+      api: canvasApi({ ok: true, workflowId: 'wf-1', name: 'empty', nodes: [], edges: [], danglingEdges: 0 })
+    })
+    await flush()
+    timers.intervals[0]()
+    await flush(30)
+
+    expect(dom.all().find((n) => n.tag === 'svg')).toBeFalsy()
+    expect(dom.all().some((n) => n._text.includes('还没有节点'))).toBe(true)
+  })
+
+  it('画布接口失败时给出可读错误，不静默留白', async () => {
+    const { dom, timers } = mountHud({ api: canvasApi({ ok: false, error: 'n8n API 500' }) })
+    await flush()
+    timers.intervals[0]()
+    await flush(30)
+
+    expect(dom.all().some((n) => n._text.includes('画布读取失败'))).toBe(true)
   })
 })

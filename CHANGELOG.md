@@ -17,6 +17,11 @@
   默认最多 3 次（退避 300ms → 900ms）。`POST` **不重试** —— 创建工作流、
   重试执行这类请求不是幂等的，重发会多出一份。
   可用 `maxAttempts` / `retryBackoffMs` 调整，设 `maxAttempts: 1` 即关闭。
+- **只读画布**：n8n 拒绝被 iframe 内嵌时，浮窗改为**自绘 SVG 画布**
+  （`GET /api/dsh-n8n-lg/workflows/{id}/canvas`）。节点用圆角矩形、连线用贝塞尔曲线，
+  AI 通道虚线、禁用节点半透明。画布数据只含节点名/短类型/坐标/连线 ——
+  节点参数（可能有 URL、内联数据、凭据引用）一个字节都不给前端。
+  实测三个真实工作流：体积 31KB → 8.5KB（压掉 72.8%）。
 - `examples/hello-webhook.json`：可直接导入的最小示例（Webhook → Code），
   零凭据依赖，用来确认「装好了、能跑通」。
 
