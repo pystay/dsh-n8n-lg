@@ -13,6 +13,14 @@
 
 ### 新增
 
+- **快照与搭建会话落盘**：默认写到 `~/.dsh/n8n-lg/`（`snapshots.json` / `sessions.json`），
+  插件重启后仍在 —— 之前是纯内存，重启等于回滚点和搭建进度一起丢。
+  - 原子写（先写 `.tmp` 再 rename），文件损坏时退化为空而不是让插件崩；
+  - 快照按 n8n 实例地址隔离，多 profile 连不同实例时不会互相覆盖；
+  - 重启后遗留的 `running` 会话会被标成 `failed`（否则时间线永远卡在 running）；
+    `paused` 的保持 `paused`，暂停能跨重启生效；
+  - 可关：`persistState: false`；可改目录：`stateDir`。
+
 - **HTTP 层重试**：`GET` / `PUT` / `DELETE` 遇到 5xx 或网络错误会自动重试，
   默认最多 3 次（退避 300ms → 900ms）。`POST` **不重试** —— 创建工作流、
   重试执行这类请求不是幂等的，重发会多出一份。

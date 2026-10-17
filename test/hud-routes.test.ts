@@ -12,6 +12,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     allowedWebhookPaths: [],
     timeoutMs: 5000,
     useTestWebhook: false,
+    persistState: false,
     sandbox: {
       enabled: false,
       image: '',

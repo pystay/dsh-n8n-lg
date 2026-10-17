@@ -47,6 +47,13 @@ export interface Config {
   timeoutMs: number
   /** 是否使用 /webhook-test/ 路径（开发调试用）。 */
   useTestWebhook: boolean
+  /**
+   * 是否把快照与搭建会话落盘（默认 true）。
+   * 关掉则只在内存里，插件重启即清空 —— 适合「不想让插件写任何文件」的场景。
+   */
+  persistState: boolean
+  /** 状态文件目录；留空用 `~/.dsh/n8n-lg`。 */
+  stateDir?: string
   /** 容器沙箱配置。 */
   sandbox: SandboxOptions
 }
@@ -59,6 +66,8 @@ export const Config: Schema<Config> = Schema.object({
   allowedWebhookPaths: Schema.array(Schema.string()).default([]),
   timeoutMs: Schema.number().default(30_000),
   useTestWebhook: Schema.boolean().default(false),
+  persistState: Schema.boolean().default(true),
+  stateDir: Schema.string(),
   sandbox: Schema.object({
     enabled: Schema.boolean().default(false),
     image: Schema.string().default('docker.n8n.io/n8nio/n8n:latest'),

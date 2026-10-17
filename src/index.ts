@@ -13,9 +13,13 @@
  *     代理路由（因为 n8n 无 CORS，浏览器不能直连）。
  */
 import type { Context } from '@deepseek-ai/cordis'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { Config } from './config.js'
 import { ConnectionManager } from './connection.js'
 import { HUD_ROUTE_PREFIX, registerHudRoutes, type WebServerLike } from './hud/routes.js'
+import { sessions } from './n8n/session.js'
+import { snapshots } from './n8n/snapshots.js'
 import { DockerSandbox } from './sandbox/docker.js'
 import { registerTools } from './tools/index.js'
 import { registerSandboxTools } from './tools/sandbox.js'
@@ -50,6 +54,21 @@ export function apply(ctx: Context, config: Config): void {
   } else {
     log('warn', '尚未配置 n8n 连接；工具已注册，可在玻璃浮窗里填写地址与 API Key')
   }
+
+  // 快照与搭建会话落盘：不落盘的话，插件重启 = 回滚点和搭建进度全丢。
+  // 默认写到 ~/.dsh/n8n-lg/（不在仓库里），可用 stateDir 改；
+  // persistState=false 时保持纯内存行为。
+  if (config.persistState !== false) {
+    const dir = config.stateDir || join(homedir(), '.dsh', 'n8n-lg')
+    snapshots.useFile(join(dir, 'snapshots.json'))
+    sessions.useFile(join(dir, 'sessions.json'))
+    const broken = snapshots.persistenceBroken || sessions.persistenceBroken
+    log(
+      broken ? 'warn' : 'info',
+      broken ? `状态目录不可写：${dir}（快照与会话只在内存里）` : `快照与会话落盘于 ${dir}`
+    )
+  }
+
   registerTools(ctx, manager, config)
 
   if (config.sandbox?.enabled) {

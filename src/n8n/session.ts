@@ -9,9 +9,12 @@
  *  - **暂停是真实生效的**：会话暂停期间，写操作会被 `blockReason` 拦下，
  *    而不只是界面上画个暂停图标。
  *
- * 会话与快照一样只存内存：不落盘、不入库、重启即清空。
+ * 会话默认只存内存；调用 {@link SessionStore.useFile} 后落盘，重启不丢。
+ * 加载时会把上次遗留的 running / planning 会话标成 failed —— 进程都重启了，
+ * 那个会话显然不会再有人推进，留着 running 只会让时间线永远卡住。
  */
 import { randomUUID } from 'node:crypto'
+import { readJsonFile, writeJsonFile } from './state-file.js'
 
 export type SessionStatus = 'planning' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled'
 
@@ -64,13 +67,41 @@ function now(): string {
   return new Date().toISOString()
 }
 
-/** 会话存储（内存，按工作流保留最近若干条）。 */
+/** 落盘结构：会话本体 + 「哪个工作流的活跃会话是哪个」。 */
+interface SessionFile {
+  sessions: BuildSession[]
+  active: Record<string, string>
+}
+
+/** 会话存储（默认内存，可选落盘；按工作流保留最近若干条）。 */
 export class SessionStore {
   private readonly byId = new Map<string, BuildSession>()
   /** 每个工作流当前「活跃」的会话（running / paused / planning）。 */
   private readonly activeByWorkflow = new Map<string, string>()
+  private filePath?: string
+  private loaded = false
+  private persistFailed = false
 
   constructor(private readonly limit = 10) {}
+
+  /** 启用落盘并加载已有数据；不调用则保持纯内存行为。 */
+  useFile(path: string): void {
+    this.filePath = path
+    this.load()
+  }
+
+  /** 落盘是否出过错。 */
+  get persistenceBroken(): boolean {
+    return this.persistFailed
+  }
+
+  /** 清空（测试用）。 */
+  clear(): void {
+    this.byId.clear()
+    this.activeByWorkflow.clear()
+    this.loaded = true
+    this.persist()
+  }
 
   /** 新建会话。同一工作流已有活跃会话时，旧会话标记为 cancelled。 */
   start(input: {
@@ -78,6 +109,7 @@ export class SessionStore {
     goal: string
     steps: Array<{ id: string; title: string; detail?: string }>
   }): BuildSession {
+    this.ensureLoaded()
     const previous = this.activeByWorkflow.get(input.workflowId)
     if (previous) {
       const old = this.byId.get(previous)
@@ -101,15 +133,18 @@ export class SessionStore {
     this.byId.set(session.id, session)
     this.activeByWorkflow.set(input.workflowId, session.id)
     this.evict(session.workflowId)
+    this.persist()
     return session
   }
 
   get(sessionId: string): BuildSession | undefined {
+    this.ensureLoaded()
     return this.byId.get(sessionId)
   }
 
   /** 某工作流当前活跃的会话。 */
   activeFor(workflowId: string): BuildSession | undefined {
+    this.ensureLoaded()
     const id = this.activeByWorkflow.get(workflowId)
     return id ? this.byId.get(id) : undefined
   }
@@ -120,12 +155,14 @@ export class SessionStore {
   }
 
   list(workflowId?: string): BuildSession[] {
+    this.ensureLoaded()
     const all = [...this.byId.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     return workflowId ? all.filter((s) => s.workflowId === workflowId) : all
   }
 
   /** 切换会话状态；结束时记录 finishedAt 并解除「活跃」标记。 */
   setStatus(sessionId: string, status: SessionStatus, note?: string): BuildSession {
+    this.ensureLoaded()
     const session = this.byId.get(sessionId)
     if (!session) throw new Error(`找不到搭建会话：${sessionId}`)
     session.status = status
@@ -137,6 +174,7 @@ export class SessionStore {
         this.activeByWorkflow.delete(session.workflowId)
       }
     }
+    this.persist()
     return session
   }
 
@@ -207,6 +245,7 @@ export class SessionStore {
   private touch(sessionId: string): void {
     const session = this.byId.get(sessionId)
     if (session) session.updatedAt = now()
+    this.persist()
   }
 
   /** 每个工作流只保留最近 N 条会话。 */
@@ -216,6 +255,40 @@ export class SessionStore {
       const oldest = all.shift()
       if (oldest) this.byId.delete(oldest.id)
     }
+  }
+
+  private ensureLoaded(): void {
+    if (this.loaded) return
+    this.load()
+  }
+
+  private load(): void {
+    this.loaded = true
+    if (!this.filePath) return
+    const data = readJsonFile<SessionFile>(this.filePath, { sessions: [], active: {} })
+    for (const session of data.sessions ?? []) {
+      if (!session || typeof session.id !== 'string' || !Array.isArray(session.steps)) continue
+      // 进程重启后，上次还在跑的会话不会再有 Agent 推进 —— 标成中断，
+      // 否则时间线会永远停在 running，用户以为还在搭。
+      if (session.status === 'running' || session.status === 'planning') {
+        session.status = 'failed'
+        session.note = session.note ?? '插件重启，会话已中断'
+        session.finishedAt = session.finishedAt ?? now()
+      }
+      this.byId.set(session.id, session)
+    }
+    for (const [workflowId, sessionId] of Object.entries(data.active ?? {})) {
+      if (this.byId.has(sessionId)) this.activeByWorkflow.set(workflowId, sessionId)
+    }
+  }
+
+  private persist(): void {
+    if (!this.filePath) return
+    const data: SessionFile = {
+      sessions: [...this.byId.values()],
+      active: Object.fromEntries(this.activeByWorkflow)
+    }
+    this.persistFailed = !writeJsonFile(this.filePath, data)
   }
 }
 

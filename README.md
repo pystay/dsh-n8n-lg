@@ -85,6 +85,8 @@ dsh plugin --profile desktop add dsh-n8n-lg
 | `allowedWebhookPaths` | 否 | `[]` | Webhook 路径白名单；留空=放行全部，生产建议显式配置（支持 `*`） |
 | `timeoutMs` | 否 | `30000` | 请求超时（毫秒） |
 | `useTestWebhook` | 否 | `false` | 用 `/webhook-test/` 路径（调试用） |
+| `persistState` | 否 | `true` | 是否把快照与搭建会话落盘（关掉则只在内存，重启即清空） |
+| `stateDir` | 否 | `~/.dsh/n8n-lg` | 状态文件目录（`snapshots.json` / `sessions.json`） |
 
 > **关于密钥**：强烈建议把 API Key 放在环境变量 **`N8N_API_KEY`**（地址用 `N8N_BASE_URL`），
 > 这样密钥完全不落配置文件、也不会被误提交到 Git。本项目**不会**把任何密钥写进仓库。
@@ -283,8 +285,9 @@ Webhook 收到 POST → Code 节点回显 → 返回 JSON。零凭据依赖，�
    `400 Workflow structure is invalid … unknown_connection_target` 拒绝保存。
    插件会在**写入前**拦下这种情况（`n8n_validate_workflow` 也能提前查），
    所以搭建时请「先加节点，再连线」。
-9. **快照只在内存里**：`n8n_snapshot_workflow` 的快照进程重启即失效，也不能替代 n8n 自身的备份。
-   搭建会话同理（只存内存）。
+9. **快照与搭建会话默认落盘**（`~/.dsh/n8n-lg/`，可用 `stateDir` 改；`persistState: false` 关掉）。
+   重启后仍在，**但只保留最近几份，不能替代 n8n 自身的备份**。
+   落盘文件按 n8n 实例地址（`baseUrl`）隔离 —— 多个 profile 连不同实例时不会互相覆盖。
 10. **暂停会话会拦下所有写入**：包括浮窗里点的「启用」。要恢复请用
     `n8n_set_build_session_state`（或浮窗的「恢复」按钮），否则会一直写不进去。
 11. **凭据向导只是提示**：它不会、也无法替你创建凭据，更不会向你索要密钥。

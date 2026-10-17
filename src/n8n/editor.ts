@@ -319,6 +319,9 @@ export class WorkflowEditor {
     }
     return snapshots.add({
       workflowId,
+      // 记下实例地址：多 profile 连不同 n8n、却共用同一份状态文件时，
+      // 靠它把快照隔开，避免把 A 实例的工作流恢复到 B 实例上。
+      baseUrl: this.client.baseUrl,
       reason,
       name: wf.name ?? 'Untitled',
       nodes: asNodeArray(wf.nodes),
@@ -329,7 +332,7 @@ export class WorkflowEditor {
 
   /** 列出某工作流的快照（最近的在后）。 */
   listSnapshots(workflowId: string): WorkflowSnapshot[] {
-    return snapshots.list(workflowId)
+    return snapshots.list(workflowId, this.client.baseUrl)
   }
 
   /**
@@ -530,7 +533,7 @@ export class WorkflowEditor {
 
   /** 恢复到指定快照（默认最近一份）；恢复前会为当前状态再留一份快照。 */
   async restore(workflowId: string, snapshotId?: string): Promise<RestoreResult> {
-    const snapshot = snapshots.get(workflowId, snapshotId)
+    const snapshot = snapshots.get(workflowId, snapshotId, this.client.baseUrl)
     if (!snapshot) {
       throw new Error('找不到可恢复的快照：请先用 n8n_snapshot_workflow 记录一次')
     }
