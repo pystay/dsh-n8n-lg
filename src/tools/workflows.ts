@@ -178,7 +178,8 @@ export function registerWorkflowTools({ ctx, manager, config, editor }: ToolDeps
       description:
         'Delete an n8n workflow (DELETE /api/v1/workflows/{id}). An active workflow must be deactivated first. ' +
         'Deletion cannot be undone from here, so `confirm: true` is required. ' +
-        'Snapshot it first with n8n_snapshot_workflow if you might need it back.',
+        'Snapshot it first with n8n_snapshot_workflow if you might need it back — ' +
+        'n8n_restore_workflow can rebuild a deleted workflow from a snapshot (with a new id).',
       parameters: {
         workflowId: { type: 'string', required: true, description: 'The workflow ID.' },
         confirm: {

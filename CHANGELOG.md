@@ -24,6 +24,20 @@
   包名 `@deepseek-ai/dsh` → **`@deepseek-ai/dsh-desktop-host`**，入口 `lib/bin.js` → `lib/cli.js`，
   CLI 统一走 `resources/runtime/cli/bin/dsh.cmd`。`docs/演示-DSH调用n8n工具.md` 已更新。
 
+### 修复
+
+- **`n8n_restore_workflow` 能救回被删除的工作流了**。之前 `restore` 直接走
+  `updateWorkflow`，工作流一旦删除就 404 —— 而 `n8n_delete_workflow` 的描述还写着
+  「先快照，也许还要拿回来」，是句空头承诺。现在检测到 404 就**按快照重建**
+  （n8n 分配新 id，结果带 `recreated: true`）。
+  浮窗的回滚提示也会明确说「已按快照重建（新 id：xxx）」，
+  而不是让用户在列表里突然看到一个陌生条目、不知道它就是刚回滚的那个。
+- **`/health` 增加 `persistenceBroken`**：目录不可写或磁盘满时，快照与会话实际只在内存里，
+  之前从外部完全看不出来，容易误以为「落盘了所以重启还在」。
+- 修掉三处「只在内存」的过时描述（0.4.0 已经持久化）：
+  `README.md`、`docs/搭建会话与凭据向导.md`、以及 `n8n_snapshot_workflow` /
+  `n8n_get_build_session` 的工具描述 —— 这类描述会直接误导 Agent 的决策。
+
 ### 轻量化
 
 - 发布包**不再包含 sourcemap**：`tgz 99.5 kB → 75.5 kB（-24%）`，文件数 `79 → 43`，

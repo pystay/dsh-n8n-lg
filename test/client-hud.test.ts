@@ -694,3 +694,60 @@ describe('只读画布（n8n 拒绝被 iframe 内嵌时的替代）', () => {
     expect(dom.all().some((n) => n._text.includes('画布读取失败'))).toBe(true)
   })
 })
+
+describe('回滚提示（工作流被重建时要说清楚新 id）', () => {
+  function rollbackApi(restorePayload) {
+    return async (path) => {
+      if (path === '/health') {
+        return { ok: true, configured: true, baseUrl: 'http://n8n.test', source: 'runtime' }
+      }
+      if (path === '/workflows') {
+        return {
+          ok: true,
+          data: [{ id: 'wf-1', name: 'demo', active: false }],
+          nextCursor: null
+        }
+      }
+      if (path.startsWith('/executions')) return { ok: true, data: [] }
+      if (path === '/focus') return { ok: true, rev: 0, workflowId: null }
+      if (path === '/workflows/wf-1/restore') return restorePayload
+      return { ok: true }
+    }
+  }
+
+  it('recreated 时提示新 id', async () => {
+    const { dom, timers } = mountHud({
+      api: rollbackApi({ ok: true, recreated: true, workflowId: 'wf-rebuilt', restoredFrom: 's1' })
+    })
+    await flush(20)
+    timers.intervals[0]()
+    await flush(30)
+
+    const btn = dom.all().find((n) => n.tag === 'button' && n._text === '回滚')
+    expect(btn).toBeTruthy()
+    btn.onclick()
+    await flush(30)
+
+    const shown = dom.all().map((n) => n._text).join('\n')
+    expect(shown).toContain('wf-rebuilt')
+    expect(shown).toContain('重建')
+  })
+
+  it('正常回滚时提示快照 id，不提重建', async () => {
+    const { dom, timers } = mountHud({
+      api: rollbackApi({ ok: true, restoredFrom: 'snap-7', workflowId: 'wf-1' })
+    })
+    await flush(20)
+    timers.intervals[0]()
+    await flush(30)
+
+    const btn = dom.all().find((n) => n.tag === 'button' && n._text === '回滚')
+    expect(btn).toBeTruthy()
+    btn.onclick()
+    await flush(30)
+
+    const shown = dom.all().map((n) => n._text).join('\n')
+    expect(shown).toContain('snap-7')
+    expect(shown).not.toContain('重建')
+  })
+})

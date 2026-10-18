@@ -8,6 +8,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ClientProvider } from '../src/connection'
 import type { N8nClient } from '../src/n8n/client'
+import { N8nApiError } from '../src/n8n/client'
 import { WorkflowEditor, mergeConnections, validateWorkflow } from '../src/n8n/editor'
 
 interface StoredWorkflow {
@@ -288,6 +289,55 @@ describe('WorkflowEditor.restore（一步撤销）', () => {
     const { provider } = makeProvider({ id: 'wf-none', name: 'wf', nodes: [], connections: {}, settings: {} })
     const editor = new WorkflowEditor(provider)
     await expect(editor.restore('wf-none')).rejects.toThrow(/找不到可恢复的快照/)
+  })
+
+  it('工作流已被删除时，按快照重建（recreated: true，id 会变）', async () => {
+    const { provider } = makeProvider({
+      id: 'wf-gone',
+      name: '已删除的流程',
+      nodes: [node('n1', 'A'), node('n2', 'B')],
+      connections: { A: { main: [[{ node: 'B', type: 'main', index: 0 }]] } },
+      settings: { executionOrder: 'v1' }
+    })
+    const editor = new WorkflowEditor(provider)
+    await editor.capture('wf-gone', '删除前留一份')
+
+    // 模拟删除：getWorkflow 一律 404；createWorkflow 返回新 id
+    const created: Array<Record<string, unknown>> = []
+    const client = provider.client() as unknown as Record<string, unknown>
+    client.getWorkflow = async () => {
+      throw new N8nApiError(404, '/api/v1/workflows/wf-gone', '{"message":"Not Found"}')
+    }
+    client.createWorkflow = async (body: Record<string, unknown>) => {
+      created.push(body)
+      return { id: 'wf-rebuilt', ...body }
+    }
+
+    const restored = await editor.restore('wf-gone')
+    expect(restored.ok).toBe(true)
+    expect(restored.recreated).toBe(true)
+    expect(restored.workflowId).toBe('wf-rebuilt')
+    expect(restored.nodeCount).toBe(2)
+    // 重建用的是快照里的完整内容
+    expect(created[0]?.name).toBe('已删除的流程')
+    expect((created[0]?.nodes as unknown[]).length).toBe(2)
+    expect(created[0]?.settings).toEqual({ executionOrder: 'v1' })
+  })
+
+  it('工作流仍在时走 update，不会重建', async () => {
+    const { provider, writes } = makeProvider({
+      id: 'wf-alive',
+      name: 'wf',
+      nodes: [node('n1', 'A')],
+      connections: {},
+      settings: {}
+    })
+    const editor = new WorkflowEditor(provider)
+    await editor.capture('wf-alive', 's1')
+
+    const restored = await editor.restore('wf-alive')
+    expect(restored.recreated).toBeUndefined()
+    expect(writes.length).toBeGreaterThan(0)
   })
 })
 

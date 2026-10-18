@@ -17,6 +17,7 @@ import { analyzeCredentials } from '../n8n/credentials.js'
 import { WorkflowEditor, validateWorkflow } from '../n8n/editor.js'
 import { isWebhookPathAllowed } from '../n8n/guard.js'
 import { sessions, summarizeSession, type SessionStatus } from '../n8n/session.js'
+import { snapshots } from '../n8n/snapshots.js'
 
 /** webServer 服务的最小结构（避免依赖 dsh-host-webserver 的类型包）。 */
 export interface WebServerLike {
@@ -137,7 +138,10 @@ export function registerHudRoutes(webServer: WebServerLike, deps: HudDeps): () =
         // ---- 不依赖 n8n 连接的路由 ----
 
         if (sub === '/health' && req.method === 'GET') {
-          return sendJson(res, 200, { ok: true, ...manager.status() })
+          // 持久化坏掉（目录不可写、磁盘满）时，快照与会话实际只在内存里 ——
+          // 让调用方能看出来，而不是以为「落盘了所以重启还在」。
+          const persistenceBroken = snapshots.persistenceBroken || sessions.persistenceBroken
+          return sendJson(res, 200, { ok: true, ...manager.status(), persistenceBroken })
         }
 
         // 连接状态（脱敏）与运行时覆盖

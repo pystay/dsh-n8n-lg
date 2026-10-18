@@ -162,8 +162,8 @@ Webhook 收到 POST → Code 节点回显 → 返回 JSON。零凭据依赖，�
 | `n8n_add_nodes` | 增量加节点/连线（**幂等 + 校验 + 读回验证 + 自动快照**） |
 | `n8n_open_editor` | 让玻璃浮窗**自动打开编辑器**（可内嵌则内嵌，否则给外部打开入口） |
 | `n8n_validate_workflow` | 保存前体检：缺字段 / 重名 / 重复 Webhook 路径 / 悬空连线 / 不存在的节点类型 |
-| `n8n_snapshot_workflow` | 记录内存快照（**回滚点**，每个工作流保留最近 5 份） |
-| `n8n_restore_workflow` | 恢复到快照（**一步撤销**；恢复前会先给当前状态留快照） |
+| `n8n_snapshot_workflow` | 记录快照（**回滚点**，每个工作流保留最近 5 份，**落盘、重启不丢**） |
+| `n8n_restore_workflow` | 恢复到快照（**一步撤销**；恢复前会先给当前状态留快照；**工作流已被删除时会按快照重建**，id 会变） |
 | `n8n_begin_build_session` | **开始搭建会话**：先声明计划（目标 + 步骤），用户在浮窗看时间线 |
 | `n8n_get_build_session` | 查看会话状态、每步结果与整体进度 |
 | `n8n_set_build_session_state` | **暂停 / 恢复 / 结束**会话（暂停期间写操作会被拦下） |
@@ -242,7 +242,9 @@ Webhook 收到 POST → Code 节点回显 → 返回 JSON。零凭据依赖，�
 激活操作都会被宿主拦下并返回 `{ ok:false, blocked:true, error }`，
 而不只是界面上画个暂停图标。这样「停下来让我看看」才有意义。
 
-会话只存在内存里（进程重启即清空），每个工作流保留最近 10 条。
+会话默认落盘（`~/.dsh/n8n-lg/sessions.json`），重启后仍在；每个工作流保留最近 10 条。
+重启时还处于 `running` 的会话会被标成 `failed`（没人推进了，避免时间线永远卡住），
+`paused` 的保持 `paused`，所以暂停能跨重启生效。
 
 ## 凭据向导
 

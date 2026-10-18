@@ -691,8 +691,17 @@ function createHud() {
         NS.api('/workflows/' + encodeURIComponent(w.id) + '/restore', { method: 'POST', body: {} })
           .then(function (r) {
             setBusy(restoreBtn, false)
-            if (r && r.ok) flash('已回滚到快照 ' + r.restoredFrom)
-            else flash('回滚失败：' + ((r && r.error) || '未知错误'))
+            if (r && r.ok) {
+              // 工作流曾被删除时是按快照重建的：id 变了，必须说清楚，否则用户会在列表里
+              // 看到一个陌生条目而不知道它就是刚回滚的那个
+              flash(
+                r.recreated
+                  ? '原工作流已被删除，已按快照重建（新 id：' + r.workflowId + '）'
+                  : '已回滚到快照 ' + r.restoredFrom
+              )
+            } else {
+              flash('回滚失败：' + ((r && r.error) || '未知错误'))
+            }
             refresh()
           })
           .catch(function (e) {

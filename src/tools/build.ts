@@ -190,7 +190,9 @@ export function registerBuildTools({ ctx, manager, editor }: ToolDeps): void {
       name: 'n8n_restore_workflow',
       description:
         'Restore a workflow to a previous snapshot (undo). Omit snapshotId to restore the most recent one. ' +
-        'A snapshot of the current state is taken first, so the restore itself can be undone.',
+        'A snapshot of the current state is taken first, so the restore itself can be undone. ' +
+        'If the workflow has been deleted, it is RECREATED from the snapshot instead — n8n assigns a new id, ' +
+        'returned as `workflowId` with `recreated: true`.',
       parameters: {
         workflowId: { type: 'string', required: true, description: 'The workflow ID.' },
         snapshotId: { type: 'string', description: 'Snapshot id from n8n_snapshot_workflow.' }

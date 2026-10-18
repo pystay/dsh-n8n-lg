@@ -11,6 +11,7 @@
  * **合并全部通道**、写前**校验**、写后**读回验证**、写前**自动快照**。
  */
 import type { ClientProvider } from '../connection.js'
+import { N8nApiError } from './client.js'
 import type { N8nClient } from './client.js'
 import { snapshots, type WorkflowSnapshot } from './snapshots.js'
 
@@ -75,6 +76,11 @@ export interface RestoreResult {
   workflowId: string
   restoredFrom: string
   nodeCount: number
+  /**
+   * `true` 表示原工作流已被删除，这次是**按快照重建**的 —— n8n 会分配新 id，
+   * 所以 `workflowId` 可能与传入的不同。
+   */
+  recreated?: boolean
 }
 
 /** 把任意值安全地当作节点数组。 */
@@ -531,31 +537,62 @@ export class WorkflowEditor {
     })
   }
 
-  /** 恢复到指定快照（默认最近一份）；恢复前会为当前状态再留一份快照。 */
+  /**
+   * 恢复到指定快照（默认最近一份）；恢复前会为当前状态再留一份快照。
+   *
+   * **工作流已被删除时也能用**：这时无法 update，改为按快照内容**重建**一个
+   * （n8n 会分配新 id，结果里 `recreated: true` 并返回新 id）。
+   * 否则 `n8n_delete_workflow` 里那句「先快照，也许还要拿回来」就是空头承诺 ——
+   * 快照存了完整的 name/nodes/connections/settings，重建只差一个 API 调用。
+   */
   async restore(workflowId: string, snapshotId?: string): Promise<RestoreResult> {
     const snapshot = snapshots.get(workflowId, snapshotId, this.client.baseUrl)
     if (!snapshot) {
       throw new Error('找不到可恢复的快照：请先用 n8n_snapshot_workflow 记录一次')
     }
+    const nodes = asNodeArray(snapshot.nodes)
+
     return this.enqueue(workflowId, async () => {
+      if (!(await this.exists(workflowId))) {
+        const created = await this.client.createWorkflow({
+          name: snapshot.name,
+          nodes,
+          connections: snapshot.connections ?? {},
+          settings: snapshot.settings ?? {}
+        })
+        return {
+          ok: true,
+          workflowId: created.id,
+          restoredFrom: snapshot.id,
+          nodeCount: nodes.length,
+          recreated: true
+        }
+      }
+
       await this.capture(workflowId, `restore(${snapshot.id}) 前的自动快照`)
       await this.client.updateWorkflow(
         workflowId,
         {
           name: snapshot.name,
-          nodes: asNodeArray(snapshot.nodes),
+          nodes,
           connections: snapshot.connections ?? {},
           settings: snapshot.settings ?? {}
         },
         { publishIfActive: false }
       )
-      return {
-        ok: true,
-        workflowId,
-        restoredFrom: snapshot.id,
-        nodeCount: asNodeArray(snapshot.nodes).length
-      }
+      return { ok: true, workflowId, restoredFrom: snapshot.id, nodeCount: nodes.length }
     })
+  }
+
+  /** 工作流是否还存在（404 视为已删除；其他错误照常抛出）。 */
+  private async exists(workflowId: string): Promise<boolean> {
+    try {
+      await this.client.getWorkflow(workflowId)
+      return true
+    } catch (err) {
+      if (err instanceof N8nApiError && err.status === 404) return false
+      throw err
+    }
   }
 
   /** 读回验证：新增的节点确实存在于 n8n 里。 */

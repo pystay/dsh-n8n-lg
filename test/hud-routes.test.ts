@@ -105,7 +105,13 @@ describe('registerHudRoutes', () => {
     const { getRoute } = captureRoute(makeManager({ baseUrl: '', apiKey: '' }))
     const res = fakeRes()
     await getRoute().handler(fakeReq({ url: `${HUD_ROUTE_PREFIX}/health` }), res)
-    expect(JSON.parse(res.body)).toMatchObject({ ok: true, configured: false, baseUrl: null })
+    expect(JSON.parse(res.body)).toMatchObject({
+      ok: true,
+      configured: false,
+      baseUrl: null,
+      // 未启用落盘时不该报「持久化坏了」；这个字段用来区分「真落盘了」和「以为落盘了」
+      persistenceBroken: false
+    })
   })
 
   it('/health 只暴露 origin 供展示，并单独给出编辑器基址，不泄漏密钥', async () => {
