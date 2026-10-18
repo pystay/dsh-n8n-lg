@@ -31,6 +31,18 @@
   需要调试请从源码 `npm run build`（本地构建仍会生成 map）。
   实测数据：sourcemap 原本占解压体积的 **34%**（126 kB / 36 个文件）。
 
+### 重构（行为不变）
+
+- `src/tools/index.ts` 从 **670 行**拆成 5 个按用途划分的模块：`workflows`（CRUD / 触发 / 启停）、
+  `executions`（查询 / 重试 / 停止）、`build`（加节点 / 编辑器 / 校验 / 快照 / 恢复）、
+  `sessions`（会话控制）、`credentials`（凭据向导）。`index.ts` 只剩 39 行编排。
+  最大单文件 **670 → 236 行**。
+  **代价**：发布包 `tgz 75.8 → 78.4 kB（+2.6 kB）`，文件 43 → 55（每个模块多一份 .js/.d.ts）。
+  用 3% 的体积换可维护性 —— 如果你更在意体积，这一步可以合回去。
+- 顺手修掉两处**过时文案**（0.4.0 已经持久化，但描述还写着只在内存）：
+  `n8n_snapshot_workflow` 的「snapshots live in memory only, cleared on restart」、
+  `n8n_get_build_session` 的「会话只存在内存中」。
+
 ## [0.4.0] - 2026-10-17
 
 ### 变更（会影响现有调用方式）
