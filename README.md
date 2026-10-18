@@ -332,6 +332,9 @@ npm run e2e:real      # 对真实 n8n 跑端到端（需 N8N_BASE_URL / N8N_API_
 
 > `src/client/*.js` 不计入覆盖率 —— 它会被打包成 `lib/client.js`，
 > 浮窗测试跑的是打包产物，源码行号对不上，计进去只会得到假数字。
+>
+> **发布包不含 sourcemap**（`files` 里用 `!lib/**/*.map` 排除），所以 npm 上是 ~75 kB / 43 个文件；
+> 本地 `npm run build` 仍会生成 map，调试不受影响。
 
 ---
 

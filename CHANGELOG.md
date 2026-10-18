@@ -24,6 +24,13 @@
   包名 `@deepseek-ai/dsh` → **`@deepseek-ai/dsh-desktop-host`**，入口 `lib/bin.js` → `lib/cli.js`，
   CLI 统一走 `resources/runtime/cli/bin/dsh.cmd`。`docs/演示-DSH调用n8n工具.md` 已更新。
 
+### 轻量化
+
+- 发布包**不再包含 sourcemap**：`tgz 99.5 kB → 75.5 kB（-24%）`，文件数 `79 → 43`，
+  解压体积 `372 kB → 246 kB`。插件是运行时装进 DSH 的，sourcemap 在运行时不参与任何逻辑；
+  需要调试请从源码 `npm run build`（本地构建仍会生成 map）。
+  实测数据：sourcemap 原本占解压体积的 **34%**（126 kB / 36 个文件）。
+
 ## [0.4.0] - 2026-10-17
 
 ### 变更（会影响现有调用方式）
