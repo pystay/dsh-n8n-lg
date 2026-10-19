@@ -530,7 +530,10 @@ describe('HUD 浮窗交互（真实 ui.js）', () => {
     })
     await flush()
 
-    const textarea = dom.all().find((n) => n.tag === 'textarea')
+    // 按 class 定位触发 body 输入框：浮窗里还有别的 textarea（节点编辑需求），
+    // 用 tag 找会拿到错的那个
+    const textarea = dom.all().find((n) => n.className === 'dshn8n-payload')
+    expect(textarea).toBeTruthy()
     textarea.value = '{"name":"world"}'
     byText(dom, '触发').events.click()
     await flush()

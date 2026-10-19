@@ -12,6 +12,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ConnectionManager } from '../connection.js'
 import { normalizeBaseUrl } from '../connection.js'
 import { N8nApiError } from '../n8n/client.js'
+import { aiBridgeReady, buildNodeEditPrompt, promptAgent, sessionShape } from './bridge.js'
 import { buildCanvas } from '../n8n/canvas.js'
 import { analyzeCredentials } from '../n8n/credentials.js'
 import { WorkflowEditor, validateWorkflow } from '../n8n/editor.js'
@@ -141,7 +142,33 @@ export function registerHudRoutes(webServer: WebServerLike, deps: HudDeps): () =
           // 持久化坏掉（目录不可写、磁盘满）时，快照与会话实际只在内存里 ——
           // 让调用方能看出来，而不是以为「落盘了所以重启还在」。
           const persistenceBroken = snapshots.persistenceBroken || sessions.persistenceBroken
-          return sendJson(res, 200, { ok: true, ...manager.status(), persistenceBroken })
+          return sendJson(res, 200, {
+            ok: true,
+            ...manager.status(),
+            persistenceBroken,
+            // 宿主能否把消息投给 Agent（决定浮窗里「右键节点提需求」是否可用）
+            aiBridge: aiBridgeReady(),
+            // 排障：会话列表的结构（只有键名/数量，不含任何会话内容）
+            sessionShape: sessionShape() ?? null
+          })
+        }
+
+        // 浮窗画布：右键节点提需求 → 交给 Agent 执行。
+        // 浮窗自己没法调 LLM，这里把「需求」包装成一条指令投给最近可用的会话，
+        // 由 Agent 用现有的 n8n 工具去改 —— 所以这条路由不依赖 n8n 连接。
+        if (sub === '/node-edit' && req.method === 'POST') {
+          const body = await readJson(req)
+          const workflowId = typeof body.workflowId === 'string' ? body.workflowId.trim() : ''
+          const nodeName = typeof body.nodeName === 'string' ? body.nodeName.trim() : ''
+          const requirement = typeof body.requirement === 'string' ? body.requirement.trim() : ''
+          if (!workflowId || !nodeName || !requirement) {
+            return sendJson(res, 400, { ok: false, error: '需要 workflowId、nodeName 与 requirement' })
+          }
+          if (requirement.length > 2000) {
+            return sendJson(res, 400, { ok: false, error: '需求太长了（上限 2000 字），请精简一下' })
+          }
+          const result = await promptAgent(buildNodeEditPrompt({ workflowId, nodeName, requirement }))
+          return sendJson(res, result.ok ? 200 : 409, result)
         }
 
         // 连接状态（脱敏）与运行时覆盖

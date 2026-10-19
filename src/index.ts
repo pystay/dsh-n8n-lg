@@ -17,6 +17,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { Config } from './config.js'
 import { ConnectionManager } from './connection.js'
+import { aiBridgeMethods, aiBridgeReady, markAiBridge, probeSessionShape } from './hud/bridge.js'
 import { HUD_ROUTE_PREFIX, registerHudRoutes, type WebServerLike } from './hud/routes.js'
 import { sessions } from './n8n/session.js'
 import { snapshots } from './n8n/snapshots.js'
@@ -113,5 +114,28 @@ export function apply(ctx: Context, config: Config): void {
     ctxAny.inject(['webServer'], mountHudRoutes)
   } else {
     mountHudRoutes(ctx)
+  }
+
+  // 探测宿主是否提供「向 Agent 投递消息」的能力。
+  //
+  // 服务名是 `sessionController`（不是 `sessions` —— 那是另一个东西，
+  // 参考 `dsh-schedule` 的 inject 列表：agents / sessions / sessionController / sessionPersistence）。
+  // 该服务的 `prompt({ sessionId, requestId, content })` 能把一条用户消息投给 Agent，
+  // 这正是「浮窗里右键节点、输入需求、让 AI 去改」这条链路的前提。
+  // 探测结果通过 /health 的 aiBridge 暴露，前端据此决定显示输入框还是降级提示。
+  if (typeof ctxAny.inject === 'function') {
+    ctxAny.inject(['sessionController'], (child: unknown) => {
+      const svc = (child as { sessionController?: unknown }).sessionController
+      markAiBridge(svc)
+      const methods = aiBridgeMethods()
+      log(
+        aiBridgeReady() ? 'info' : 'warn',
+        aiBridgeReady()
+          ? `AI 桥接可用（sessionController 有 ${methods.length} 个方法）`
+          : 'AI 桥接不可用：sessionController 没有 prompt 方法'
+      )
+      // 发消息必须先知道「发给哪个会话」，所以探一次 list() 的结构（只记键名，不记内容）
+      if (aiBridgeReady()) void probeSessionShape()
+    })
   }
 }

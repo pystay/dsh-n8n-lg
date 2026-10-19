@@ -142,7 +142,10 @@ describe('apply() 装配', () => {
     })
     apply(ctx, defaultConfig())
 
-    expect(injected).toEqual([['webServer']])
+    // 用 inject 而不是直接读 ctx.webServer —— 否则服务未就绪时路由会漏注册
+    expect(injected).toContainEqual(['webServer'])
+    // 另外还会注入 sessionController：浮窗里「右键节点提需求」要靠它把消息投给 Agent
+    expect(injected).toContainEqual(['sessionController'])
   })
 })
 

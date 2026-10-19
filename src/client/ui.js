@@ -73,6 +73,14 @@ var CSS = [
   '.dshn8n-canvas .dshn8n-node text.nm{fill:#e8eeff;font-size:12px;font-weight:600;}',
   '.dshn8n-canvas .dshn8n-node text.kind{fill:#8f9cba;font-size:10px;}',
   '.dshn8n-canvas .dshn8n-node.disabled text{opacity:.55;}',
+  '.dshn8n-canvas .dshn8n-node{cursor:context-menu;}',
+  '.dshn8n-menu{position:fixed;z-index:99999;background:rgba(26,32,48,.985);border:1px solid rgba(120,150,220,.35);border-radius:9px;padding:4px;box-shadow:0 10px 28px rgba(0,0,0,.5);}',
+  '.dshn8n-menu-item{display:block;width:100%;text-align:left;background:transparent;border:0;color:#e8eeff;font-size:12.5px;padding:7px 14px;border-radius:6px;cursor:pointer;white-space:nowrap;}',
+  '.dshn8n-menu-item:hover{background:rgba(90,130,220,.3);}',
+  '.dshn8n-nodeedit{margin:8px 0 0;padding:10px;border:1px solid rgba(120,150,220,.3);border-radius:10px;background:rgba(20,26,40,.6);}',
+  '.dshn8n-nodeedit-label{font-size:12px;color:#9fb0d0;margin-bottom:6px;}',
+  '.dshn8n-nodeedit-input{width:100%;box-sizing:border-box;resize:vertical;min-height:46px;background:rgba(10,12,20,.85);border:1px solid rgba(120,150,220,.3);border-radius:8px;color:#e8eeff;font-size:12.5px;padding:8px;font-family:inherit;line-height:1.5;}',
+  '.dshn8n-nodeedit-actions{display:flex;gap:8px;margin-top:8px;}',
   '.dshn8n-embed-text{white-space:pre-line;margin-bottom:12px;}',
   '.dshn8n-hint{font-size:11px;color:#8a93a6;padding:6px 12px;}',
   '.dshn8n-sess-head{display:flex;align-items:center;gap:8px;margin-bottom:6px;}',
@@ -201,12 +209,30 @@ function createHud() {
   var canvasBox = el('div', { class: 'dshn8n-canvasbox', style: 'display:none' })
   var canvasNote = el('div', { class: 'dshn8n-hint', text: '' })
 
+  // 右键节点 → 写下需求 → 交给 AI 改。
+  // 浮窗自己改不了节点（它没有 LLM，也不该直接写库），所以这里只负责把需求
+  // 描述清楚并投给 Agent，由 Agent 用 n8n 工具去改 —— 改完画布会自动刷新。
+  var nodeEditLabel = el('div', { class: 'dshn8n-nodeedit-label', text: '' })
+  var nodeEditInput = el('textarea', {
+    class: 'dshn8n-nodeedit-input',
+    rows: '2',
+    placeholder: '例如：把 URL 改成 https://api.example.com，method 用 POST'
+  })
+  var nodeEditSend = el('button', { class: 'dshn8n-btn primary', text: '交给 AI 修改' })
+  var nodeEditCancel = el('button', { class: 'dshn8n-btn', text: '取消' })
+  var nodeEditBox = el('div', { class: 'dshn8n-nodeedit', style: 'display:none' }, [
+    nodeEditLabel,
+    nodeEditInput,
+    el('div', { class: 'dshn8n-nodeedit-actions' }, [nodeEditSend, nodeEditCancel])
+  ])
+
   var editorSection = el('div', { class: 'dshn8n-editor', style: 'display:none' }, [
     el('div', { class: 'dshn8n-editor-bar' }, [editorTitle, autoBtn, openExternalBtn, closeEditorBtn]),
     frame,
     embedNotice,
     canvasBox,
     canvasNote,
+    nodeEditBox,
     el('div', {
       class: 'dshn8n-hint',
       text: 'n8n 允许内嵌时这里直接显示编辑器；不允许时改为只读画布（能看到节点与连线，改还是要打开系统浏览器）。要自己改就先关掉「自动刷新」。',
@@ -397,6 +423,12 @@ function createHud() {
       kind.textContent = clipText(n.kind, 18)
       g.appendChild(kind)
 
+      // 右键节点 → 提需求交给 AI 改
+      g.addEventListener('contextmenu', function (ev) {
+        ev.preventDefault()
+        showNodeMenu(n.name, ev.clientX, ev.clientY)
+      })
+
       svg.appendChild(g)
     })
 
@@ -420,12 +452,119 @@ function createHud() {
     canvasBox.style.display = 'none'
     canvasBox.textContent = ''
     canvasNote.textContent = ''
+    closeNodeEditor()
   }
+
+  // ---- 右键节点：写需求 → 交给 AI ----
+
+  var nodeMenu = null
+
+  function closeNodeMenu() {
+    if (nodeMenu && nodeMenu.parentNode) nodeMenu.parentNode.removeChild(nodeMenu)
+    nodeMenu = null
+  }
+
+  /** 在鼠标位置弹一个只有一项的菜单。 */
+  function showNodeMenu(nodeName, clientX, clientY) {
+    closeNodeMenu()
+    var item = el('button', { class: 'dshn8n-menu-item', text: '修改这个节点…' })
+    item.onclick = function () {
+      closeNodeMenu()
+      openNodeEditor(nodeName)
+    }
+    var menu = el('div', { class: 'dshn8n-menu' }, [item])
+    // 贴边时往回收，避免菜单跑到屏幕外
+    menu.style.left = Math.max(8, Math.min(clientX, window.innerWidth - 190)) + 'px'
+    menu.style.top = Math.max(8, Math.min(clientY, window.innerHeight - 60)) + 'px'
+    document.body.appendChild(menu)
+    nodeMenu = menu
+    // 点别处 / 按 Esc 关掉
+    setTimeout(function () {
+      document.addEventListener('click', closeNodeMenu, { once: true })
+      document.addEventListener(
+        'keydown',
+        function onEsc(ev) {
+          if (ev.key === 'Escape') {
+            closeNodeMenu()
+            document.removeEventListener('keydown', onEsc)
+          }
+        }
+      )
+    }, 0)
+  }
+
+  function openNodeEditor(nodeName) {
+    state.nodeEdit = { nodeName: nodeName }
+    nodeEditLabel.textContent = '修改节点「' + nodeName + '」— 用一句话描述你想要的改动'
+    nodeEditInput.value = ''
+    nodeEditBox.style.display = 'block'
+    if (typeof nodeEditInput.focus === 'function') nodeEditInput.focus()
+  }
+
+  function closeNodeEditor() {
+    state.nodeEdit = null
+    nodeEditBox.style.display = 'none'
+    nodeEditInput.value = ''
+  }
+
+  /** 把需求投给 Agent；改完由 Agent 写库，画布靠自动刷新同步。 */
+  function submitNodeEdit() {
+    if (!state.nodeEdit) return
+    var requirement = String(nodeEditInput.value || '').trim()
+    if (!requirement) {
+      flash('先写下你想怎么改这个节点')
+      return
+    }
+    var workflowId = state.editor.workflowId
+    if (!workflowId) {
+      flash('请先打开一个工作流')
+      return
+    }
+    setBusy(nodeEditSend, true)
+    flash('已把需求交给 AI，它正在改…')
+    NS.api('/node-edit', {
+      method: 'POST',
+      body: {
+        workflowId: workflowId,
+        nodeName: state.nodeEdit.nodeName,
+        requirement: requirement
+      }
+    })
+      .then(function (r) {
+        setBusy(nodeEditSend, false)
+        if (r && r.ok) {
+          flash(
+            '已发送给 AI（会话 ' +
+              String(r.sessionId || '').slice(0, 8) +
+              '）— 改完后画布会自动刷新'
+          )
+          closeNodeEditor()
+        } else {
+          flash('发送失败：' + ((r && r.error) || '未知错误'))
+        }
+      })
+      .catch(function (e) {
+        setBusy(nodeEditSend, false)
+        flash('发送失败：' + e.message)
+      })
+  }
+
+  nodeEditSend.onclick = submitNodeEdit
+  nodeEditCancel.onclick = closeNodeEditor
+  nodeEditInput.addEventListener('keydown', function (ev) {
+    // Enter 提交，Shift+Enter 换行
+    if (ev.key === 'Enter' && !ev.shiftKey) {
+      ev.preventDefault()
+      submitNodeEdit()
+    }
+  })
 
   function loadCanvas(workflowId) {
     canvasBox.style.display = 'block'
     canvasBox.textContent = ''
     canvasNote.textContent = '正在读取画布…'
+    // 切换工作流时收起未提交的节点编辑，避免把需求发到另一个工作流上
+    closeNodeEditor()
     NS.api('/workflows/' + encodeURIComponent(workflowId) + '/canvas')
       .then(function (r) {
         if (r && r.ok) renderCanvas(r)
