@@ -157,6 +157,32 @@ export function buildNodeEditPrompt(input: {
     '4. 用一两句话说明你改了什么。'
   ].join('\n')
 }
+
+/**
+ * 把「加个节点」包装成一条给 Agent 的指令。
+ *
+ * 和修改一样要划边界：只**追加**、不动已有节点、不重排；并要求它把新节点
+ * 接到合适的位置（否则加出来的节点是孤立的，激活时校验也过不了）。
+ */
+export function buildNodeAddPrompt(input: { workflowId: string; requirement: string }): string {
+  return [
+    `【来自 DSH 浮窗画布】用户在工作流 ${input.workflowId} 的画布上提出了「添加节点」需求：`,
+    '',
+    input.requirement.trim(),
+    '',
+    '请按这个顺序处理：',
+    `1. 用 n8n_get_workflow 读取 ${input.workflowId} 的当前配置，看清现有节点和连线；`,
+    '2. 用 n8n_add_nodes 追加新节点，并把它**接到合适的位置**（不要留下孤立节点），',
+    '   **不要改动已有节点的参数，也不要重排布局**；',
+    '3. 用 n8n_validate_workflow 校验后再保存；',
+    '4. 用一两句话说明你加了什么、接在哪里。'
+  ].join('\n')
+}
+
+/**
+ * 探测 `list()` 的返回结构。
+ * 只读键名和数量，**不读取、不保存任何会话标题或内容**。
+ */
 export async function probeSessionShape(): Promise<void> {
   if (!controller) {
     shape = { kind: 'unknown', error: 'sessionController 不可用' }

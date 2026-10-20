@@ -89,15 +89,24 @@ function walk(node) {
 function makeDom() {
   const head = new FakeElement('head')
   const body = new FakeElement('body')
+  // 画布右键菜单会往 document 上挂「点别处关闭」/「Esc 关闭」的监听，
+  // 所以这里要能收 addEventListener
+  const docEvents = {}
   const document = {
     head,
     body,
     createElement: (tag) => new FakeElement(tag),
     // 只读画布用 SVG（createElementNS），这里同样返回 FakeElement 以便断言结构
     createElementNS: (_ns, tag) => new FakeElement(tag),
-    getElementById: (id) => [...walk(head), ...walk(body)].find((n) => n.attrs.id === id)
+    getElementById: (id) => [...walk(head), ...walk(body)].find((n) => n.attrs.id === id),
+    addEventListener(type, fn) {
+      docEvents[type] = fn
+    },
+    removeEventListener(type) {
+      delete docEvents[type]
+    }
   }
-  return { document, head, body, all: () => [...walk(head), ...walk(body)] }
+  return { document, head, body, docEvents, all: () => [...walk(head), ...walk(body)] }
 }
 
 /** 可控的定时器。 */
@@ -161,6 +170,8 @@ function mountHud(opts = {}) {
 
   const sandbox = {
     document: dom.document,
+    // 右键菜单按鼠标位置定位时要读视口尺寸
+    window: { innerWidth: 1280, innerHeight: 800 },
     setTimeout: timers.setTimeout,
     clearTimeout: timers.clearTimeout,
     setInterval: timers.setInterval,
@@ -695,6 +706,104 @@ describe('只读画布（n8n 拒绝被 iframe 内嵌时的替代）', () => {
     await flush(30)
 
     expect(dom.all().some((n) => n._text.includes('画布读取失败'))).toBe(true)
+  })
+
+  it('右键节点弹出「修改这个节点…」', async () => {
+    const { dom, timers } = mountHud({ api: canvasApi(twoNodes) })
+    await flush()
+    timers.intervals[0]()
+    await flush(30)
+
+    const svg = dom.all().find((n) => n.tag === 'svg')
+    const nodeG = svg.children.find((c) => c.tag === 'g')
+    nodeG.events.contextmenu({
+      preventDefault() {},
+      stopPropagation() {},
+      clientX: 20,
+      clientY: 20
+    })
+
+    const item = dom.all().find((n) => n.className === 'dshn8n-menu-item')
+    expect(item).toBeTruthy()
+    expect(item._text).toBe('修改这个节点…')
+  })
+
+  it('右键画布空白处弹出「添加节点…」，提交后走 /node-add', async () => {
+    const calls = []
+    const base = canvasApi(twoNodes)
+    const { dom, timers } = mountHud({
+      api: async (path, options) => {
+        if (path === '/node-add') {
+          calls.push(options.body)
+          return { ok: true, sessionId: 'sess-1' }
+        }
+        return base(path, options)
+      }
+    })
+    await flush()
+    timers.intervals[0]()
+    await flush(30)
+
+    const svg = dom.all().find((n) => n.tag === 'svg')
+    svg.events.contextmenu({ preventDefault() {}, clientX: 30, clientY: 30 })
+
+    const item = dom.all().find((n) => n.className === 'dshn8n-menu-item')
+    expect(item._text).toBe('添加节点…')
+    item.onclick()
+    await flush()
+
+    const textarea = dom.all().find((n) => n.className === 'dshn8n-nodeedit-input')
+    expect(textarea).toBeTruthy()
+    textarea.value = '加个 HTTP 节点，接在 Webhook 后面'
+    // 回车提交
+    textarea.events.keydown({ key: 'Enter', shiftKey: false, preventDefault() {} })
+    await flush()
+
+    expect(calls[0]).toMatchObject({
+      workflowId: 'wf-1',
+      requirement: '加个 HTTP 节点，接在 Webhook 后面'
+    })
+    // 添加不需要 nodeName
+    expect(calls[0].nodeName).toBeUndefined()
+  })
+
+  it('右键节点提交时走 /node-edit，并带上节点名', async () => {
+    const calls = []
+    const base = canvasApi(twoNodes)
+    const { dom, timers } = mountHud({
+      api: async (path, options) => {
+        if (path === '/node-edit') {
+          calls.push(options.body)
+          return { ok: true, sessionId: 'sess-2' }
+        }
+        return base(path, options)
+      }
+    })
+    await flush()
+    timers.intervals[0]()
+    await flush(30)
+
+    const svg = dom.all().find((n) => n.tag === 'svg')
+    const nodeG = svg.children.find((c) => c.tag === 'g')
+    nodeG.events.contextmenu({
+      preventDefault() {},
+      stopPropagation() {},
+      clientX: 20,
+      clientY: 20
+    })
+    dom.all().find((n) => n.className === 'dshn8n-menu-item').onclick()
+    await flush()
+
+    const textarea = dom.all().find((n) => n.className === 'dshn8n-nodeedit-input')
+    textarea.value = '把 method 换成 POST'
+    textarea.events.keydown({ key: 'Enter', shiftKey: false, preventDefault() {} })
+    await flush()
+
+    expect(calls[0]).toMatchObject({
+      workflowId: 'wf-1',
+      nodeName: 'Webhook',
+      requirement: '把 method 换成 POST'
+    })
   })
 })
 

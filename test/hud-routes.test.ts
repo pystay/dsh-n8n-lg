@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ConnectionManager } from '../src/connection'
+import { markAiBridge } from '../src/hud/bridge'
 import { registerHudRoutes, HUD_ROUTE_PREFIX, type WebServerLike } from '../src/hud/routes'
 import { sessions } from '../src/n8n/session'
 import type { Config } from '../src/config'
@@ -781,5 +782,112 @@ describe('HUD 画布路由（n8n 拒绝内嵌时的替代）', () => {
     expect(body.ok).toBe(true)
     expect(body.nodes).toEqual([])
     expect(body.edges).toEqual([])
+  })
+})
+
+describe('POST /node-edit 与 /node-add（把画布需求投给 AI）', () => {
+  function fakeSessions(items: Array<Record<string, unknown>>) {
+    const sent: unknown[] = []
+    return {
+      sent,
+      controller: {
+        async list() {
+          return { items }
+        },
+        async prompt(req: unknown) {
+          sent.push(req)
+          return { accepted: true }
+        }
+      }
+    }
+  }
+
+  afterEach(() => {
+    markAiBridge(undefined)
+  })
+
+  it('/node-edit 缺 nodeName 时 400', async () => {
+    const { getRoute } = captureRoute()
+    const res = fakeRes()
+    await getRoute().handler(
+      fakeReq({
+        method: 'POST',
+        url: `${HUD_ROUTE_PREFIX}/node-edit`,
+        body: JSON.stringify({ workflowId: 'w', requirement: 'r' })
+      }),
+      res
+    )
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('/node-edit 投递成功返回会话 id', async () => {
+    const { sent, controller } = fakeSessions([
+      { sessionId: 's1', updatedAt: '2026-10-20T00:00:00Z', agentAvailable: true }
+    ])
+    markAiBridge(controller)
+    const { getRoute } = captureRoute()
+    const res = fakeRes()
+    await getRoute().handler(
+      fakeReq({
+        method: 'POST',
+        url: `${HUD_ROUTE_PREFIX}/node-edit`,
+        body: JSON.stringify({ workflowId: 'wf-1', nodeName: 'HTTP', requirement: '把 URL 换掉' })
+      }),
+      res
+    )
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.body)).toMatchObject({ ok: true, sessionId: 's1' })
+    expect(sent).toHaveLength(1)
+  })
+
+  it('/node-add 不需要 nodeName，且指令要求接上位置', async () => {
+    const { sent, controller } = fakeSessions([
+      { sessionId: 's2', updatedAt: '2026-10-20T00:00:00Z', agentAvailable: true }
+    ])
+    markAiBridge(controller)
+    const { getRoute } = captureRoute()
+    const res = fakeRes()
+    await getRoute().handler(
+      fakeReq({
+        method: 'POST',
+        url: `${HUD_ROUTE_PREFIX}/node-add`,
+        body: JSON.stringify({ workflowId: 'wf-1', requirement: '加个 HTTP 节点' })
+      }),
+      res
+    )
+    expect(res.statusCode).toBe(200)
+    const req = sent[0] as { content: Array<{ text: string }> }
+    expect(req.content[0]?.text).toContain('n8n_add_nodes')
+    expect(req.content[0]?.text).toContain('不要留下孤立节点')
+  })
+
+  it('没有可用会话时 409（不静默失败）', async () => {
+    markAiBridge(fakeSessions([]).controller)
+    const { getRoute } = captureRoute()
+    const res = fakeRes()
+    await getRoute().handler(
+      fakeReq({
+        method: 'POST',
+        url: `${HUD_ROUTE_PREFIX}/node-add`,
+        body: JSON.stringify({ workflowId: 'w', requirement: 'r' })
+      }),
+      res
+    )
+    expect(res.statusCode).toBe(409)
+    expect(JSON.parse(res.body).ok).toBe(false)
+  })
+
+  it('需求超过 2000 字时 400', async () => {
+    const { getRoute } = captureRoute()
+    const res = fakeRes()
+    await getRoute().handler(
+      fakeReq({
+        method: 'POST',
+        url: `${HUD_ROUTE_PREFIX}/node-add`,
+        body: JSON.stringify({ workflowId: 'w', requirement: 'x'.repeat(2001) })
+      }),
+      res
+    )
+    expect(res.statusCode).toBe(400)
   })
 })

@@ -426,10 +426,18 @@ function createHud() {
       // 右键节点 → 提需求交给 AI 改
       g.addEventListener('contextmenu', function (ev) {
         ev.preventDefault()
+        // 阻止冒泡：否则会连带触发画布空白处的「添加节点」菜单
+        ev.stopPropagation()
         showNodeMenu(n.name, ev.clientX, ev.clientY)
       })
 
       svg.appendChild(g)
+    })
+
+    // 画布空白处右键 → 添加节点（节点上的事件已 stopPropagation，不会走到这里）
+    svg.addEventListener('contextmenu', function (ev) {
+      ev.preventDefault()
+      showCanvasBlankMenu(ev.clientX, ev.clientY)
     })
 
     canvasBox.appendChild(svg)
@@ -464,15 +472,18 @@ function createHud() {
     nodeMenu = null
   }
 
-  /** 在鼠标位置弹一个只有一项的菜单。 */
-  function showNodeMenu(nodeName, clientX, clientY) {
+  /** 在鼠标位置弹一个菜单。items: [{ label, onClick }] */
+  function showCanvasMenu(items, clientX, clientY) {
     closeNodeMenu()
-    var item = el('button', { class: 'dshn8n-menu-item', text: '修改这个节点…' })
-    item.onclick = function () {
-      closeNodeMenu()
-      openNodeEditor(nodeName)
-    }
-    var menu = el('div', { class: 'dshn8n-menu' }, [item])
+    var menu = el('div', { class: 'dshn8n-menu' })
+    items.forEach(function (it) {
+      var btn = el('button', { class: 'dshn8n-menu-item', text: it.label })
+      btn.onclick = function () {
+        closeNodeMenu()
+        it.onClick()
+      }
+      menu.appendChild(btn)
+    })
     // 贴边时往回收，避免菜单跑到屏幕外
     menu.style.left = Math.max(8, Math.min(clientX, window.innerWidth - 190)) + 'px'
     menu.style.top = Math.max(8, Math.min(clientY, window.innerHeight - 60)) + 'px'
@@ -493,9 +504,52 @@ function createHud() {
     }, 0)
   }
 
-  function openNodeEditor(nodeName) {
-    state.nodeEdit = { nodeName: nodeName }
-    nodeEditLabel.textContent = '修改节点「' + nodeName + '」— 用一句话描述你想要的改动'
+  /** 右键节点：只有「修改」 */
+  function showNodeMenu(nodeName, clientX, clientY) {
+    showCanvasMenu(
+      [
+        {
+          label: '修改这个节点…',
+          onClick: function () {
+            openNodeEditor('modify', nodeName)
+          }
+        }
+      ],
+      clientX,
+      clientY
+    )
+  }
+
+  /** 右键画布空白处：只有「添加」 */
+  function showCanvasBlankMenu(clientX, clientY) {
+    showCanvasMenu(
+      [
+        {
+          label: '添加节点…',
+          onClick: function () {
+            openNodeEditor('add')
+          }
+        }
+      ],
+      clientX,
+      clientY
+    )
+  }
+
+  /**
+   * 打开需求输入框。
+   * @param {'modify'|'add'} mode 修改某个节点 / 往工作流里加节点
+   * @param {string} [nodeName] 仅 modify 需要
+   */
+  function openNodeEditor(mode, nodeName) {
+    state.nodeEdit = { mode: mode, nodeName: nodeName || '' }
+    if (mode === 'add') {
+      nodeEditLabel.textContent = '添加节点 — 用一句话描述你要加什么'
+      nodeEditInput.placeholder = '例如：加一个 HTTP 请求节点，调用 https://api.example.com，接在 Webhook 后面'
+    } else {
+      nodeEditLabel.textContent = '修改节点「' + nodeName + '」— 用一句话描述你想要的改动'
+      nodeEditInput.placeholder = '例如：把 URL 改成 https://api.example.com，method 用 POST'
+    }
     nodeEditInput.value = ''
     nodeEditBox.style.display = 'block'
     if (typeof nodeEditInput.focus === 'function') nodeEditInput.focus()
@@ -512,7 +566,7 @@ function createHud() {
     if (!state.nodeEdit) return
     var requirement = String(nodeEditInput.value || '').trim()
     if (!requirement) {
-      flash('先写下你想怎么改这个节点')
+      flash('先写下你想怎么改')
       return
     }
     var workflowId = state.editor.workflowId
@@ -520,15 +574,14 @@ function createHud() {
       flash('请先打开一个工作流')
       return
     }
+    var isAdd = state.nodeEdit.mode === 'add'
     setBusy(nodeEditSend, true)
-    flash('已把需求交给 AI，它正在改…')
-    NS.api('/node-edit', {
+    flash(isAdd ? '已把「添加节点」需求交给 AI…' : '已把需求交给 AI，它正在改…')
+    NS.api(isAdd ? '/node-add' : '/node-edit', {
       method: 'POST',
-      body: {
-        workflowId: workflowId,
-        nodeName: state.nodeEdit.nodeName,
-        requirement: requirement
-      }
+      body: isAdd
+        ? { workflowId: workflowId, requirement: requirement }
+        : { workflowId: workflowId, nodeName: state.nodeEdit.nodeName, requirement: requirement }
     })
       .then(function (r) {
         setBusy(nodeEditSend, false)

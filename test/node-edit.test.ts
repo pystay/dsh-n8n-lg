@@ -8,7 +8,13 @@
  *  3. 宿主没提供 sessionController 时要能降级报错，而不是抛异常。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { buildNodeEditPrompt, markAiBridge, promptAgent, sessionShape } from '../src/hud/bridge'
+import {
+  buildNodeAddPrompt,
+  buildNodeEditPrompt,
+  markAiBridge,
+  promptAgent,
+  sessionShape
+} from '../src/hud/bridge'
 
 /** 造一个假的 sessionController。 */
 function fakeController(items: Array<Record<string, unknown>>) {
@@ -49,6 +55,33 @@ describe('buildNodeEditPrompt', () => {
     expect(text).toContain('不要改动其他节点')
     expect(text).toContain('n8n_get_workflow')
     expect(text).toContain('n8n_validate_workflow')
+  })
+})
+
+describe('buildNodeAddPrompt（加节点）', () => {
+  it('带上工作流与用户原话', () => {
+    const text = buildNodeAddPrompt({
+      workflowId: 'wf-9',
+      requirement: '加一个 HTTP 请求节点，调用 https://api.example.com'
+    })
+    expect(text).toContain('wf-9')
+    expect(text).toContain('加一个 HTTP 请求节点')
+  })
+
+  it('要求接上位置，且不动已有节点', () => {
+    const text = buildNodeAddPrompt({ workflowId: 'w', requirement: 'r' })
+    expect(text).toContain('n8n_add_nodes')
+    // 孤立节点会让激活校验失败，所以必须要求接上
+    expect(text).toContain('不要留下孤立节点')
+    expect(text).toContain('不要改动已有节点的参数')
+    expect(text).toContain('n8n_validate_workflow')
+  })
+
+  it('和「修改」的指令是两套，不会互相串', () => {
+    const add = buildNodeAddPrompt({ workflowId: 'w', requirement: 'r' })
+    const edit = buildNodeEditPrompt({ workflowId: 'w', nodeName: 'n', requirement: 'r' })
+    expect(add).not.toContain('找到节点「')
+    expect(edit).not.toContain('不要留下孤立节点')
   })
 })
 

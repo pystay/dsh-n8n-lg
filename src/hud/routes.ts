@@ -12,7 +12,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ConnectionManager } from '../connection.js'
 import { normalizeBaseUrl } from '../connection.js'
 import { N8nApiError } from '../n8n/client.js'
-import { aiBridgeReady, buildNodeEditPrompt, promptAgent, sessionShape } from './bridge.js'
+import { aiBridgeReady, buildNodeAddPrompt, buildNodeEditPrompt, promptAgent, sessionShape } from './bridge.js'
 import { buildCanvas } from '../n8n/canvas.js'
 import { analyzeCredentials } from '../n8n/credentials.js'
 import { WorkflowEditor, validateWorkflow } from '../n8n/editor.js'
@@ -168,6 +168,21 @@ export function registerHudRoutes(webServer: WebServerLike, deps: HudDeps): () =
             return sendJson(res, 400, { ok: false, error: '需求太长了（上限 2000 字），请精简一下' })
           }
           const result = await promptAgent(buildNodeEditPrompt({ workflowId, nodeName, requirement }))
+          return sendJson(res, result.ok ? 200 : 409, result)
+        }
+
+        // 画布空白处：加个节点。和 /node-edit 同一条投递链路，只是指令不同。
+        if (sub === '/node-add' && req.method === 'POST') {
+          const body = await readJson(req)
+          const workflowId = typeof body.workflowId === 'string' ? body.workflowId.trim() : ''
+          const requirement = typeof body.requirement === 'string' ? body.requirement.trim() : ''
+          if (!workflowId || !requirement) {
+            return sendJson(res, 400, { ok: false, error: '需要 workflowId 与 requirement' })
+          }
+          if (requirement.length > 2000) {
+            return sendJson(res, 400, { ok: false, error: '需求太长了（上限 2000 字），请精简一下' })
+          }
+          const result = await promptAgent(buildNodeAddPrompt({ workflowId, requirement }))
           return sendJson(res, result.ok ? 200 : 409, result)
         }
 
