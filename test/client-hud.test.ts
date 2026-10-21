@@ -600,8 +600,28 @@ describe('HUD 数据层（真实 store.js）', () => {
     return { NS: sandbox.__DSH_N8N_HUD__, stored }
   }
 
-  it('非 2xx 响应不会被 JSON 里的 ok:true 掩盖（回归）', async () => {
-    const { NS } = mountStore(async () => ({
+  it('主题偏好：默认深色，只认 light，其余回落到深色', () => {
+    const { NS, stored } = mountStore(async () => ({ ok: true }))
+    expect(NS.loadTheme()).toBe('dark')
+
+    NS.saveTheme('light')
+    expect(NS.loadTheme()).toBe('light')
+
+    // 存了别的值（或旧版本残留）不能把浮窗搞成白屏
+    stored.set('dsh-n8n-lg:theme', 'solarized')
+    expect(NS.loadTheme()).toBe('dark')
+  })
+
+  it('localStorage 不可用时 loadTheme 不抛异常', () => {
+    const sandbox = { fetch: async () => ({ ok: true }) }
+    vm.createContext(sandbox)
+    vm.runInContext(storeSource, sandbox)
+    const NS = sandbox.__DSH_N8N_HUD__
+    expect(NS.loadTheme()).toBe('dark')
+    expect(() => NS.saveTheme('light')).not.toThrow()
+  })
+
+  it('非 2xx 响应不会被 JSON 里的 ok:true 掩盖（回归）', async () => {    const { NS } = mountStore(async () => ({
       ok: false,
       status: 500,
       text: async () => JSON.stringify({ ok: true })
@@ -697,6 +717,41 @@ describe('只读画布（n8n 拒绝被 iframe 内嵌时的替代）', () => {
 
     expect(dom.all().find((n) => n.tag === 'svg')).toBeFalsy()
     expect(dom.all().some((n) => n._text.includes('还没有节点'))).toBe(true)
+  })
+
+  it('主题按钮：在 root 上切换 dshn8n-light 类', async () => {
+    const { dom } = mountHud({})
+    await flush()
+
+    const root = dom.all().find((n) => n.className && n.className.indexOf('dshn8n-root') === 0)
+    expect(root).toBeTruthy()
+    expect(root.className).not.toContain('dshn8n-light')
+
+    const btn = dom.all().find((n) => n.className && n.className.includes('dshn8n-themebtn'))
+    expect(btn).toBeTruthy()
+    // 深色下显示「☀」（点了变亮）
+    expect(btn._text).toBe('☀')
+
+    btn.onclick()
+    expect(root.className).toContain('dshn8n-light')
+    expect(btn._text).toBe('☾')
+
+    btn.onclick()
+    expect(root.className).not.toContain('dshn8n-light')
+    expect(btn._text).toBe('☀')
+  })
+
+  it('右键菜单带上当前主题类（菜单挂在 body 上，拿不到 root 的变量）', async () => {
+    const { dom, timers } = mountHud({ api: canvasApi(twoNodes) })
+    await flush()
+    timers.intervals[0]()
+    await flush(30)
+
+    const svg = dom.all().find((n) => n.tag === 'svg')
+    svg.events.contextmenu({ preventDefault() {}, clientX: 10, clientY: 10 })
+    const menu = dom.all().find((n) => n.className && n.className.includes('dshn8n-menu'))
+    expect(menu).toBeTruthy()
+    expect(menu.className).not.toContain('dshn8n-light')
   })
 
   it('画布接口失败时给出可读错误，不静默留白', async () => {

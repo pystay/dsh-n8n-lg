@@ -14,9 +14,28 @@
 
   var NS = (globalThis.__DSH_N8N_HUD__ = globalThis.__DSH_N8N_HUD__ || {})
   var LS_KEY = 'dsh-n8n-lg:hud-config'
+  var THEME_KEY = 'dsh-n8n-lg:theme'
   var DEFAULT_BASE_URL = 'http://127.0.0.1:5678'
   var API_BASE = '/api/dsh-n8n-lg'
   var DEFAULT_TIMEOUT_MS = 20000
+
+  /** 读主题偏好：只认 'dark' / 'light'，其他一律回落到深色。 */
+  function loadTheme() {
+    try {
+      var v = globalThis.localStorage && globalThis.localStorage.getItem(THEME_KEY)
+      return v === 'light' ? 'light' : 'dark'
+    } catch (e) {
+      return 'dark'
+    }
+  }
+
+  function saveTheme(theme) {
+    try {
+      if (globalThis.localStorage) globalThis.localStorage.setItem(THEME_KEY, theme)
+    } catch (e) {
+      /* 存不了就只在本次会话生效 */
+    }
+  }
 
   function loadConfig() {
     var cfg = null
@@ -129,6 +148,8 @@
   NS.API_BASE = API_BASE
   NS.loadConfig = loadConfig
   NS.saveConfig = saveConfig
+  NS.loadTheme = loadTheme
+  NS.saveTheme = saveTheme
   NS.pushConfig = pushConfig
   NS.clearHostConfig = clearHostConfig
   NS.fetchStatus = fetchStatus
