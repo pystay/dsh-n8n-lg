@@ -130,10 +130,10 @@ var CSS = [
   '.dshn8n-orb:hover{transform:translateY(-2px) scale(1.04);}',
   '.dshn8n-orb:active{transform:scale(.96);}',
   '.dshn8n-orb .dshn8n-dot{position:absolute;top:6px;right:6px;}',
-  '.dshn8n-orb.dshn8n-hidden{opacity:0;transform:scale(.75);pointer-events:none;}',
+  '.dshn8n-orb.dshn8n-hidden{position:absolute;right:0;bottom:0;opacity:0;transform:scale(.75);pointer-events:none;}',
   // 展开/收起用 opacity + scale，而不是 display：display 切换没有过渡
-  '.dshn8n-panel{width:352px;max-width:calc(100vw - 24px);max-height:78vh;display:flex;flex-direction:column;border-radius:16px;overflow:hidden;border:1px solid var(--n8n-border-strong);background:var(--n8n-panel-bg);backdrop-filter:blur(20px) saturate(160%);-webkit-backdrop-filter:blur(20px) saturate(160%);box-shadow:var(--n8n-panel-shadow);transform-origin:100% 100%;transition:width .2s ease,opacity .18s ease,transform .18s cubic-bezier(.2,.9,.3,1);}',
-  '.dshn8n-panel.dshn8n-hidden{opacity:0;transform:scale(.95) translateY(8px);pointer-events:none;}',
+  '.dshn8n-panel{width:352px;max-width:calc(100vw - 24px);max-height:78vh;display:flex;flex-direction:column;border-radius:16px;overflow:hidden;border:1px solid var(--n8n-border-strong);background:var(--n8n-panel-bg);backdrop-filter:blur(20px) saturate(160%);-webkit-backdrop-filter:blur(20px) saturate(160%);box-shadow:var(--n8n-panel-shadow);transform-origin:0 0;transition:width .2s ease,opacity .18s ease,transform .18s cubic-bezier(.2,.9,.3,1);}',
+  '.dshn8n-panel.dshn8n-hidden{position:absolute;right:0;bottom:0;opacity:0;transform:scale(.95) translateY(8px);pointer-events:none;}',
   '.dshn8n-panel.wide{width:min(920px,92vw);}',
   '.dshn8n-head{display:flex;align-items:center;gap:8px;padding:11px 12px;border-bottom:1px solid var(--n8n-border);cursor:move;user-select:none;}',
   '.dshn8n-title{font-weight:700;font-size:13px;flex:1;display:flex;align-items:center;gap:8px;}',

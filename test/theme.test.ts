@@ -80,4 +80,22 @@ describe('动效', () => {
     expect(block![1]).toContain('animation:none')
     expect(block![1]).toContain('transition:none')
   })
+
+  it('隐藏的元素必须脱离文档流（否则会占位，把另一个元素挤偏）', () => {
+    // opacity:0 仍然占位。收起时面板若留在流里，会把 54px 的球挤到容器底部，
+    // 而拖动记录的是容器左上角 —— 结果球只有下半截能拖。
+    const panelHidden = /\.dshn8n-panel\.dshn8n-hidden\{([^}]*)\}/.exec(SRC)
+    expect(panelHidden).toBeTruthy()
+    expect(panelHidden![1]).toContain('position:absolute')
+
+    const orbHidden = /\.dshn8n-orb\.dshn8n-hidden\{([^}]*)\}/.exec(SRC)
+    expect(orbHidden).toBeTruthy()
+    expect(orbHidden![1]).toContain('position:absolute')
+  })
+
+  it('面板从左上角展开（球所在的位置），而不是右下角', () => {
+    const panel = /\.dshn8n-panel\{([^}]*)\}/.exec(SRC)
+    expect(panel).toBeTruthy()
+    expect(panel![1]).toContain('transform-origin:0 0')
+  })
 })
