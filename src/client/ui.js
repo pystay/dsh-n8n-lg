@@ -445,6 +445,20 @@ function createHud() {
     state.collapsed = v
     toggleHidden(panel, v)
     toggleHidden(orb, !v)
+    // 展开时面板比球大得多：如果之前把球拖到了屏幕最右边/最下边，
+    // 直接展开会有半个面板在屏幕外，这里重新夹一下。
+    if (!v && pos) {
+      var size = visibleSize()
+      var vw = (globalThis.window && globalThis.window.innerWidth) || 1280
+      var vh = (globalThis.window && globalThis.window.innerHeight) || 800
+      if (pos.left > vw - size.w || pos.top > vh - size.h) {
+        pos = {
+          left: Math.max(0, Math.min(pos.left, vw - size.w)),
+          top: Math.max(0, Math.min(pos.top, vh - size.h))
+        }
+        applyPos()
+      }
+    }
   }
 
   /** 加/去 `dshn8n-hidden`，不动元素上已有的其它 class（比如 panel 的 wide）。 */
@@ -475,15 +489,28 @@ function createHud() {
     root.style.bottom = 'auto'
   }
 
+  /**
+   * 边界要按**当前可见的元素**算。
+   *
+   * 收起时面板还在 DOM 里（用 opacity 隐藏，为了保留动画），所以 `root` 的尺寸
+   * 仍然是整个面板的 —— 拿它算边界会把小球锁在屏幕左上角一小块地方，
+   * 拖不到右边和下边。收起时只有球可见，就按球算。
+   */
+  function visibleSize() {
+    var el = state.collapsed ? orb : panel
+    var w = (el && el.offsetWidth) || (state.collapsed ? 54 : 352)
+    var h = (el && el.offsetHeight) || (state.collapsed ? 54 : 420)
+    return { w: w, h: h }
+  }
+
   /** 夹在视口内，避免拖出屏幕后再也找不回来。 */
   function setPos(left, top) {
     var vw = (globalThis.window && globalThis.window.innerWidth) || 1280
     var vh = (globalThis.window && globalThis.window.innerHeight) || 800
-    var w = root.offsetWidth || 60
-    var h = root.offsetHeight || 60
+    var size = visibleSize()
     pos = {
-      left: Math.round(Math.max(0, Math.min(left, vw - w))),
-      top: Math.round(Math.max(0, Math.min(top, vh - h)))
+      left: Math.round(Math.max(0, Math.min(left, vw - size.w))),
+      top: Math.round(Math.max(0, Math.min(top, vh - size.h)))
     }
     applyPos()
   }

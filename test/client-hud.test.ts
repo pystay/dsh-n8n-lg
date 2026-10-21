@@ -82,9 +82,13 @@ class FakeElement {
     return String(this.tag).toUpperCase()
   }
   get offsetWidth() {
+    if (this.className.includes('dshn8n-panel')) return 352
+    if (this.className.includes('dshn8n-orb')) return 54
     return 60
   }
   get offsetHeight() {
+    if (this.className.includes('dshn8n-panel')) return 420
+    if (this.className.includes('dshn8n-orb')) return 54
     return 60
   }
 }
@@ -1034,12 +1038,15 @@ describe('拖动定位', () => {
     const root = dom.all().find((n) => n.className.startsWith('dshn8n-root'))
     const orb = dom.all().find((n) => n.className.includes('dshn8n-orb'))
 
+    // 收起状态下只有球可见，边界按球（54×54）算 → 1280-54 / 800-54
+    byText(dom, '—').events.click()
+
     grab(dom, orb)
     fireDoc(dom, 'mousemove', { clientX: 99999, clientY: 99999 })
     fireDoc(dom, 'mouseup', {})
 
-    expect(root.style.left).toBe('1220px')
-    expect(root.style.top).toBe('740px')
+    expect(root.style.left).toBe('1226px')
+    expect(root.style.top).toBe('746px')
   })
 
   it('按在标题栏的按钮上不会开始拖动', async () => {
@@ -1062,6 +1069,30 @@ describe('拖动定位', () => {
 
     expect(root.style.left).toBeFalsy()
     expect(posCalls).toHaveLength(0)
+  })
+
+  it('展开时边界按面板算，收起时按球算（回归：收起后球拖不到屏幕右侧）', async () => {
+    const { dom } = mountHud({})
+    await flush()
+    const root = dom.all().find((n) => n.className.startsWith('dshn8n-root'))
+
+    // 展开状态：面板 352×420，边界 1280-352 / 800-420
+    const head = dom.all().find((n) => n.className.startsWith('dshn8n-head'))
+    grab(dom, head, 100, 100)
+    fireDoc(dom, 'mousemove', { clientX: 99999, clientY: 99999 })
+    fireDoc(dom, 'mouseup', {})
+    expect(root.style.left).toBe('928px')
+    expect(root.style.top).toBe('380px')
+
+    // 收起后只剩 54×54 的球，边界应该放宽到 1280-54 / 800-54。
+    // 如果这里还按面板算，球就只能停在 928 附近，看起来「拖不远」。
+    byText(dom, '—').events.click()
+    const orb = dom.all().find((n) => n.className.includes('dshn8n-orb'))
+    grab(dom, orb, 100, 100)
+    fireDoc(dom, 'mousemove', { clientX: 99999, clientY: 99999 })
+    fireDoc(dom, 'mouseup', {})
+    expect(root.style.left).toBe('1226px')
+    expect(root.style.top).toBe('746px')
   })
 
   it('启动时按记住的位置摆放', async () => {
