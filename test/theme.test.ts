@@ -50,3 +50,34 @@ describe('主题变量完整性', () => {
     }
   })
 })
+
+describe('动效', () => {
+  it('展开/收起用 class 而不是 display（display 切换没有过渡）', () => {
+    expect(SRC).toContain('.dshn8n-panel.dshn8n-hidden')
+    expect(SRC).toContain('.dshn8n-orb.dshn8n-hidden')
+    // 这两条若还在，说明有人把实现改回 display 了
+    expect(SRC).not.toMatch(/panel\.style\.display\s*=/)
+    expect(SRC).not.toMatch(/orb\.style\.display\s*=/)
+  })
+
+  it('关键动画都定义了', () => {
+    expect(SRC).toContain('@keyframes dshn8n-pop')
+    expect(SRC).toContain('@keyframes dshn8n-pulse')
+  })
+
+  it('只有「连接中/运行中」的状态点会脉冲，正常状态不动', () => {
+    const pulseRule = /\.dshn8n-dot\.wait\{[^}]*animation:dshn8n-pulse/.test(SRC)
+    expect(pulseRule).toBe(true)
+    // ok / err 不该有无限动画
+    expect(SRC).not.toMatch(/\.dshn8n-dot\.ok\{[^}]*animation/)
+    expect(SRC).not.toMatch(/\.dshn8n-dot\.err\{[^}]*animation/)
+  })
+
+  it('尊重系统的「减少动态效果」设置', () => {
+    expect(SRC).toContain('prefers-reduced-motion')
+    const block = /@media \(prefers-reduced-motion:reduce\)\{([^@]*)\}/.exec(SRC)
+    expect(block).toBeTruthy()
+    expect(block![1]).toContain('animation:none')
+    expect(block![1]).toContain('transition:none')
+  })
+})

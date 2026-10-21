@@ -201,7 +201,8 @@ describe('HUD 浮窗交互（真实 ui.js）', () => {
     const { dom, hud } = mountHud()
     await flush()
     const panel = dom.all().find((n) => n.className.startsWith('dshn8n-panel'))
-    expect(panel.style.display).toBe('flex')
+    // 展开/收起现在用 class 控制（display 切换没有过渡动画）
+    expect(panel.className).not.toContain('dshn8n-hidden')
     expect(dom.body.children.length).toBe(1)
     hud.destroy()
     expect(dom.body.children[0].removed).toBe(true)
@@ -222,13 +223,13 @@ describe('HUD 浮窗交互（真实 ui.js）', () => {
 
     byText(dom, '—').events.click()
     const panel = dom.all().find((n) => n.className.startsWith('dshn8n-panel'))
-    expect(panel.style.display).toBe('none')
+    expect(panel.className).toContain('dshn8n-hidden')
 
     rev = 1
     timers.intervals[0]() // 轮询
     await flush()
 
-    expect(panel.style.display).toBe('flex')
+    expect(panel.className).not.toContain('dshn8n-hidden')
     const editor = dom.all().find((n) => n.className.startsWith('dshn8n-editor'))
     expect(editor.style.display).toBe('flex')
   })

@@ -120,20 +120,30 @@ var THEME_LIGHT = [
 var CSS = [
   '.dshn8n-root,.dshn8n-menu{' + THEME_DARK + '}',
   '.dshn8n-root.dshn8n-light,.dshn8n-menu.dshn8n-light{' + THEME_LIGHT + '}',
+  // 动画统一用这几个曲线：进入用回弹感、退出用平顺收尾
+  '@keyframes dshn8n-pop{from{opacity:0;transform:scale(.96) translateY(-3px);}to{opacity:1;transform:none;}}',
+  '@keyframes dshn8n-pulse{0%,100%{opacity:1;}50%{opacity:.45;}}',
+  // 动效偏好：系统开了「减少动态效果」就全关掉，别跟用户较劲
+  '@media (prefers-reduced-motion:reduce){.dshn8n-root *,.dshn8n-menu *{animation:none !important;transition:none !important;}}',
   '.dshn8n-root{position:fixed;right:18px;bottom:18px;z-index:2147483000;font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--n8n-fg);}',
-  '.dshn8n-orb{width:54px;height:54px;border-radius:50%;border:1px solid var(--n8n-border-strong);cursor:pointer;color:var(--n8n-orb-fg);font-weight:700;font-size:13px;letter-spacing:.5px;background:var(--n8n-orb-bg);backdrop-filter:blur(14px) saturate(150%);-webkit-backdrop-filter:blur(14px) saturate(150%);box-shadow:var(--n8n-orb-shadow);transition:transform .15s ease;}',
+  '.dshn8n-orb{width:54px;height:54px;border-radius:50%;border:1px solid var(--n8n-border-strong);cursor:pointer;color:var(--n8n-orb-fg);font-weight:700;font-size:13px;letter-spacing:.5px;background:var(--n8n-orb-bg);backdrop-filter:blur(14px) saturate(150%);-webkit-backdrop-filter:blur(14px) saturate(150%);box-shadow:var(--n8n-orb-shadow);transition:transform .15s ease,opacity .16s ease;}',
   '.dshn8n-orb:hover{transform:translateY(-2px) scale(1.04);}',
+  '.dshn8n-orb:active{transform:scale(.96);}',
   '.dshn8n-orb .dshn8n-dot{position:absolute;top:6px;right:6px;}',
-  '.dshn8n-panel{width:352px;max-width:calc(100vw - 24px);max-height:78vh;display:flex;flex-direction:column;border-radius:16px;overflow:hidden;border:1px solid var(--n8n-border-strong);background:var(--n8n-panel-bg);backdrop-filter:blur(20px) saturate(160%);-webkit-backdrop-filter:blur(20px) saturate(160%);box-shadow:var(--n8n-panel-shadow);transition:width .18s ease;}',
+  '.dshn8n-orb.dshn8n-hidden{opacity:0;transform:scale(.75);pointer-events:none;}',
+  // 展开/收起用 opacity + scale，而不是 display：display 切换没有过渡
+  '.dshn8n-panel{width:352px;max-width:calc(100vw - 24px);max-height:78vh;display:flex;flex-direction:column;border-radius:16px;overflow:hidden;border:1px solid var(--n8n-border-strong);background:var(--n8n-panel-bg);backdrop-filter:blur(20px) saturate(160%);-webkit-backdrop-filter:blur(20px) saturate(160%);box-shadow:var(--n8n-panel-shadow);transform-origin:100% 100%;transition:width .2s ease,opacity .18s ease,transform .18s cubic-bezier(.2,.9,.3,1);}',
+  '.dshn8n-panel.dshn8n-hidden{opacity:0;transform:scale(.95) translateY(8px);pointer-events:none;}',
   '.dshn8n-panel.wide{width:min(920px,92vw);}',
   '.dshn8n-head{display:flex;align-items:center;gap:8px;padding:11px 12px;border-bottom:1px solid var(--n8n-border);}',
   '.dshn8n-title{font-weight:700;font-size:13px;flex:1;display:flex;align-items:center;gap:8px;}',
   '.dshn8n-dot{width:9px;height:9px;border-radius:50%;background:var(--n8n-fg-faint);box-shadow:0 0 8px currentColor;}',
   '.dshn8n-dot.ok{background:var(--n8n-ok);color:var(--n8n-ok);}',
   '.dshn8n-dot.err{background:var(--n8n-err);color:var(--n8n-err);}',
-  '.dshn8n-dot.wait{background:var(--n8n-warn);color:var(--n8n-warn);}',
-  '.dshn8n-btn{border:1px solid var(--n8n-btn-border);background:var(--n8n-btn-bg);color:var(--n8n-fg);border-radius:8px;padding:5px 9px;font-size:12px;cursor:pointer;transition:background .15s;}',
+  '.dshn8n-dot.wait{background:var(--n8n-warn);color:var(--n8n-warn);animation:dshn8n-pulse 1.8s ease-in-out infinite;}',
+  '.dshn8n-btn{border:1px solid var(--n8n-btn-border);background:var(--n8n-btn-bg);color:var(--n8n-fg);border-radius:8px;padding:5px 9px;font-size:12px;cursor:pointer;transition:background .15s ease,border-color .15s ease,color .15s ease,transform .1s ease;}',
   '.dshn8n-btn:hover{background:var(--n8n-btn-bg-hover);}',
+  '.dshn8n-btn:active:not(:disabled){transform:scale(.97);}',
   '.dshn8n-btn:disabled{opacity:.45;cursor:not-allowed;}',
   // color-mix 需要 Chrome 111+；先用纯色兜底，不支持的宿主也不会变成「没背景的按钮」
   '.dshn8n-btn.primary{background:var(--n8n-accent);background:linear-gradient(135deg,var(--n8n-accent),color-mix(in srgb,var(--n8n-accent) 78%,#000));border-color:var(--n8n-accent);color:#fff;}',
@@ -142,10 +152,11 @@ var CSS = [
   '.dshn8n-sec{margin-top:10px;}',
   '.dshn8n-sec h4{margin:0 0 6px;font-size:11px;font-weight:600;letter-spacing:.6px;text-transform:uppercase;color:var(--n8n-fg-dim);}',
   '.dshn8n-row{display:flex;align-items:center;gap:6px;margin-bottom:6px;}',
-  '.dshn8n-row input{flex:1;min-width:0;border-radius:8px;border:1px solid var(--n8n-border-strong);background:var(--n8n-input-bg);color:var(--n8n-fg);padding:6px 9px;font-size:12px;outline:none;}',
+  '.dshn8n-row input{flex:1;min-width:0;border-radius:8px;border:1px solid var(--n8n-border-strong);background:var(--n8n-input-bg);color:var(--n8n-fg);padding:6px 9px;font-size:12px;outline:none;transition:border-color .15s ease,box-shadow .15s ease,background .2s ease;}',
   '.dshn8n-row input:focus,.dshn8n-payload:focus,.dshn8n-nodeedit-input:focus{border-color:var(--n8n-accent);box-shadow:0 0 0 3px var(--n8n-focus-ring);outline:none;}',
   '.dshn8n-payload{width:100%;min-height:46px;resize:vertical;border-radius:8px;border:1px solid var(--n8n-border-strong);background:var(--n8n-input-bg);color:var(--n8n-fg);padding:6px 9px;font-size:12px;font-family:ui-monospace,Consolas,monospace;outline:none;box-sizing:border-box;}',
-  '.dshn8n-item{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:7px 9px;border-radius:10px;background:var(--n8n-item-bg);border:1px solid var(--n8n-border-soft);margin-bottom:6px;}',
+  '.dshn8n-item{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:7px 9px;border-radius:10px;background:var(--n8n-item-bg);border:1px solid var(--n8n-border-soft);margin-bottom:6px;transition:border-color .15s ease,background .15s ease;}',
+  '.dshn8n-item:hover{border-color:var(--n8n-border-strong);}',
   '.dshn8n-item .nm{flex:1;min-width:0;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
   '.dshn8n-tag{font-size:10.5px;padding:2px 7px;border-radius:999px;border:1px solid var(--n8n-border-strong);color:var(--n8n-fg-soft);}',
   '.dshn8n-tag.on{color:var(--n8n-ok);border-color:var(--n8n-ok);}',
@@ -175,7 +186,7 @@ var CSS = [
   '.dshn8n-canvas .dshn8n-node text.kind{fill:var(--n8n-node-kind);font-size:10px;}',
   '.dshn8n-canvas .dshn8n-node.disabled text{opacity:.55;}',
   '.dshn8n-canvas .dshn8n-node{cursor:context-menu;}',
-  '.dshn8n-menu{position:fixed;z-index:99999;background:var(--n8n-menu-bg);border:1px solid var(--n8n-menu-border);border-radius:8px;padding:4px;box-shadow:var(--n8n-menu-shadow);backdrop-filter:blur(16px);}',
+  '.dshn8n-menu{position:fixed;z-index:99999;background:var(--n8n-menu-bg);border:1px solid var(--n8n-menu-border);border-radius:8px;padding:4px;box-shadow:var(--n8n-menu-shadow);backdrop-filter:blur(16px);transform-origin:0 0;animation:dshn8n-pop .13s cubic-bezier(.2,.9,.3,1);}',
   '.dshn8n-menu-item{display:block;width:100%;text-align:left;background:transparent;border:0;color:var(--n8n-fg);font-size:12.5px;padding:7px 14px;border-radius:6px;cursor:pointer;white-space:nowrap;}',
   '.dshn8n-menu-item:hover{background:var(--n8n-menu-hover);}',
   '.dshn8n-nodeedit{margin:8px 0 0;padding:10px;border:1px solid var(--n8n-border-strong);border-radius:10px;background:var(--n8n-item-bg);}',
@@ -396,9 +407,8 @@ function createHud() {
     ]),
   ])
 
-  var orb = el('button', { class: 'dshn8n-orb', text: 'n8n', title: '打开 n8n 监控' })
+  var orb = el('button', { class: 'dshn8n-orb dshn8n-hidden', text: 'n8n', title: '打开 n8n 监控' })
   orb.appendChild(el('span', { class: 'dshn8n-dot wait' }))
-  orb.style.display = 'none'
 
   var root = el('div', { class: 'dshn8n-root' }, [panel, orb])
   document.body.appendChild(root)
@@ -414,10 +424,24 @@ function createHud() {
     return id ? base + '/workflow/' + encodeURIComponent(id) : base + '/home/workflows'
   }
 
+  /**
+   * 展开 / 收起。
+   * 用 class 而不是 `display`：`display:none ↔ flex` 之间没有过渡，
+   * 面板会硬生生地出现/消失；改成 opacity + scale 才有「弹出来」的感觉。
+   */
   function setCollapsed(v) {
     state.collapsed = v
-    panel.style.display = v ? 'none' : 'flex'
-    orb.style.display = v ? 'block' : 'none'
+    toggleHidden(panel, v)
+    toggleHidden(orb, !v)
+  }
+
+  /** 加/去 `dshn8n-hidden`，不动元素上已有的其它 class（比如 panel 的 wide）。 */
+  function toggleHidden(node, hidden) {
+    var base = String(node.className || '')
+      .replace(/\s*dshn8n-hidden\b/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    node.className = base + (hidden ? ' dshn8n-hidden' : '')
   }
 
   function setStatus(kind) {
