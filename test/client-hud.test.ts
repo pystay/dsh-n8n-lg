@@ -69,6 +69,24 @@ class FakeElement {
   remove() {
     this.removed = true
   }
+  getBoundingClientRect() {
+    return {
+      left: parseFloat(this.style.left) || 0,
+      top: parseFloat(this.style.top) || 0,
+      width: this.offsetWidth,
+      height: this.offsetHeight
+    }
+  }
+  // 真实 DOM 的 tagName 是大写，ui.js 的 isInteractive 读的是它
+  get tagName() {
+    return String(this.tag).toUpperCase()
+  }
+  get offsetWidth() {
+    return 60
+  }
+  get offsetHeight() {
+    return 60
+  }
 }
 
 function parseStyle(text) {
@@ -100,7 +118,7 @@ function makeDom() {
     createElementNS: (_ns, tag) => new FakeElement(tag),
     getElementById: (id) => [...walk(head), ...walk(body)].find((n) => n.attrs.id === id),
     addEventListener(type, fn) {
-      docEvents[type] = fn
+      ;(docEvents[type] = docEvents[type] || []).push(fn)
     },
     removeEventListener(type) {
       delete docEvents[type]
@@ -156,6 +174,8 @@ function byText(dom, text) {
 function mountHud(opts = {}) {
   const dom = makeDom()
   const timers = makeTimers()
+  const themeCalls = []
+  const posCalls = []
   const cfg = { baseUrl: 'http://n8n.test', apiKey: 'k', ...(opts.config ?? {}) }
   const apiCalls = []
   const api =
@@ -181,6 +201,10 @@ function mountHud(opts = {}) {
       DEFAULT_BASE_URL: 'http://127.0.0.1:5678',
       loadConfig: () => cfg,
       saveConfig: () => opts.localStorageOk ?? true,
+      loadTheme: () => opts.theme ?? 'dark',
+      saveTheme: (t) => themeCalls.push(t),
+      loadPos: () => opts.pos ?? null,
+      savePos: (p) => posCalls.push(p),
       pushConfig: (c) => api('/config', { method: 'POST', body: c }),
       api: (path, options) => {
         apiCalls.push({ path, options })
@@ -191,7 +215,7 @@ function mountHud(opts = {}) {
   vm.createContext(sandbox)
   vm.runInContext(uiSource, sandbox)
   const hud = sandbox.createHud()
-  return { dom, timers, hud, apiCalls, sandbox }
+  return { dom, timers, hud, apiCalls, sandbox, themeCalls, posCalls }
 }
 
 afterEach(() => vi.unstubAllGlobals())
@@ -917,5 +941,134 @@ describe('回滚提示（工作流被重建时要说清楚新 id）', () => {
     const shown = dom.all().map((n) => n._text).join('\n')
     expect(shown).toContain('snap-7')
     expect(shown).not.toContain('重建')
+  })
+})
+
+describe('拖动定位', () => {
+  /** document 上的监听现在是数组（拖拽在球和标题栏各注册一次）。 */
+  function fireDoc(dom, type, ev) {
+    ;(dom.docEvents[type] || []).forEach((fn) => fn(ev))
+  }
+
+  function grab(dom, handle, x = 100, y = 100) {
+    handle.events.mousedown({
+      button: 0,
+      clientX: x,
+      clientY: y,
+      target: handle,
+      preventDefault() {}
+    })
+  }
+
+  it('拖动悬浮球会移动整个浮窗，并记住位置', async () => {
+    const { dom, posCalls } = mountHud({})
+    await flush()
+    const root = dom.all().find((n) => n.className.startsWith('dshn8n-root'))
+    const orb = dom.all().find((n) => n.className.includes('dshn8n-orb'))
+
+    grab(dom, orb)
+    fireDoc(dom, 'mousemove', { clientX: 160, clientY: 140 })
+    fireDoc(dom, 'mouseup', {})
+
+    expect(root.style.left).toBe('60px')
+    expect(root.style.top).toBe('40px')
+    // 必须同时清掉 right/bottom，否则 left 和 right 一起生效会把容器拉宽
+    expect(root.style.right).toBe('auto')
+    expect(root.style.bottom).toBe('auto')
+    expect(posCalls.at(-1)).toEqual({ left: 60, top: 40 })
+  })
+
+  it('拖动标题栏也能移动', async () => {
+    const { dom } = mountHud({})
+    await flush()
+    const root = dom.all().find((n) => n.className.startsWith('dshn8n-root'))
+    const head = dom.all().find((n) => n.className.startsWith('dshn8n-head'))
+
+    grab(dom, head, 200, 200)
+    fireDoc(dom, 'mousemove', { clientX: 180, clientY: 260 })
+    fireDoc(dom, 'mouseup', {})
+
+    expect(root.style.left).toBe('-20px'.replace('-20px', '0px'))
+    expect(root.style.top).toBe('60px')
+  })
+
+  it('移动小于 3px 算手抖，不算拖动（点击仍有效）', async () => {
+    const { dom, posCalls } = mountHud({})
+    await flush()
+    const root = dom.all().find((n) => n.className.startsWith('dshn8n-root'))
+    const orb = dom.all().find((n) => n.className.includes('dshn8n-orb'))
+    const panel = dom.all().find((n) => n.className.startsWith('dshn8n-panel'))
+
+    grab(dom, orb)
+    fireDoc(dom, 'mousemove', { clientX: 101, clientY: 100 })
+    fireDoc(dom, 'mouseup', {})
+
+    expect(root.style.left).toBeFalsy()
+    expect(posCalls).toHaveLength(0)
+    // 手抖之后点击应该照常展开
+    orb.onclick()
+    expect(panel.className).not.toContain('dshn8n-hidden')
+  })
+
+  it('拖完松手不会顺手把面板打开', async () => {
+    const { dom } = mountHud({})
+    await flush()
+    const orb = dom.all().find((n) => n.className.includes('dshn8n-orb'))
+    const panel = dom.all().find((n) => n.className.startsWith('dshn8n-panel'))
+    // 先收起
+    byText(dom, '—').events.click()
+    expect(panel.className).toContain('dshn8n-hidden')
+
+    grab(dom, orb)
+    fireDoc(dom, 'mousemove', { clientX: 200, clientY: 200 })
+    fireDoc(dom, 'mouseup', {})
+    // 浏览器在 mouseup 之后会补发 click，这里模拟它
+    orb.onclick()
+
+    expect(panel.className).toContain('dshn8n-hidden')
+  })
+
+  it('拖不出视口（视口 1280×800，浮窗 60×60）', async () => {
+    const { dom } = mountHud({})
+    await flush()
+    const root = dom.all().find((n) => n.className.startsWith('dshn8n-root'))
+    const orb = dom.all().find((n) => n.className.includes('dshn8n-orb'))
+
+    grab(dom, orb)
+    fireDoc(dom, 'mousemove', { clientX: 99999, clientY: 99999 })
+    fireDoc(dom, 'mouseup', {})
+
+    expect(root.style.left).toBe('1220px')
+    expect(root.style.top).toBe('740px')
+  })
+
+  it('按在标题栏的按钮上不会开始拖动', async () => {
+    const { dom, posCalls } = mountHud({})
+    await flush()
+    const root = dom.all().find((n) => n.className.startsWith('dshn8n-root'))
+    const head = dom.all().find((n) => n.className.startsWith('dshn8n-head'))
+    const refresh = dom.all().find((n) => n.tag === 'button' && n.textContent === '刷新')
+
+    // 真实浏览器里按在按钮上，mousedown 会冒泡到标题栏，target 仍是按钮
+    head.events.mousedown({
+      button: 0,
+      clientX: 100,
+      clientY: 100,
+      target: refresh,
+      preventDefault() {}
+    })
+    fireDoc(dom, 'mousemove', { clientX: 300, clientY: 300 })
+    fireDoc(dom, 'mouseup', {})
+
+    expect(root.style.left).toBeFalsy()
+    expect(posCalls).toHaveLength(0)
+  })
+
+  it('启动时按记住的位置摆放', async () => {
+    const { dom } = mountHud({ pos: { left: 120, top: 80 } })
+    await flush()
+    const root = dom.all().find((n) => n.className.startsWith('dshn8n-root'))
+    expect(root.style.left).toBe('120px')
+    expect(root.style.top).toBe('80px')
   })
 })

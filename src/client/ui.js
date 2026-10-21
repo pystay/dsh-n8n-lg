@@ -126,7 +126,7 @@ var CSS = [
   // 动效偏好：系统开了「减少动态效果」就全关掉，别跟用户较劲
   '@media (prefers-reduced-motion:reduce){.dshn8n-root *,.dshn8n-menu *{animation:none !important;transition:none !important;}}',
   '.dshn8n-root{position:fixed;right:18px;bottom:18px;z-index:2147483000;font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--n8n-fg);}',
-  '.dshn8n-orb{width:54px;height:54px;border-radius:50%;border:1px solid var(--n8n-border-strong);cursor:pointer;color:var(--n8n-orb-fg);font-weight:700;font-size:13px;letter-spacing:.5px;background:var(--n8n-orb-bg);backdrop-filter:blur(14px) saturate(150%);-webkit-backdrop-filter:blur(14px) saturate(150%);box-shadow:var(--n8n-orb-shadow);transition:transform .15s ease,opacity .16s ease;}',
+  '.dshn8n-orb{width:54px;height:54px;border-radius:50%;border:1px solid var(--n8n-border-strong);cursor:grab;color:var(--n8n-orb-fg);font-weight:700;font-size:13px;letter-spacing:.5px;background:var(--n8n-orb-bg);backdrop-filter:blur(14px) saturate(150%);-webkit-backdrop-filter:blur(14px) saturate(150%);box-shadow:var(--n8n-orb-shadow);transition:transform .15s ease,opacity .16s ease;}',
   '.dshn8n-orb:hover{transform:translateY(-2px) scale(1.04);}',
   '.dshn8n-orb:active{transform:scale(.96);}',
   '.dshn8n-orb .dshn8n-dot{position:absolute;top:6px;right:6px;}',
@@ -135,7 +135,7 @@ var CSS = [
   '.dshn8n-panel{width:352px;max-width:calc(100vw - 24px);max-height:78vh;display:flex;flex-direction:column;border-radius:16px;overflow:hidden;border:1px solid var(--n8n-border-strong);background:var(--n8n-panel-bg);backdrop-filter:blur(20px) saturate(160%);-webkit-backdrop-filter:blur(20px) saturate(160%);box-shadow:var(--n8n-panel-shadow);transform-origin:100% 100%;transition:width .2s ease,opacity .18s ease,transform .18s cubic-bezier(.2,.9,.3,1);}',
   '.dshn8n-panel.dshn8n-hidden{opacity:0;transform:scale(.95) translateY(8px);pointer-events:none;}',
   '.dshn8n-panel.wide{width:min(920px,92vw);}',
-  '.dshn8n-head{display:flex;align-items:center;gap:8px;padding:11px 12px;border-bottom:1px solid var(--n8n-border);}',
+  '.dshn8n-head{display:flex;align-items:center;gap:8px;padding:11px 12px;border-bottom:1px solid var(--n8n-border);cursor:move;user-select:none;}',
   '.dshn8n-title{font-weight:700;font-size:13px;flex:1;display:flex;align-items:center;gap:8px;}',
   '.dshn8n-dot{width:9px;height:9px;border-radius:50%;background:var(--n8n-fg-faint);box-shadow:0 0 8px currentColor;}',
   '.dshn8n-dot.ok{background:var(--n8n-ok);color:var(--n8n-ok);}',
@@ -218,6 +218,7 @@ var CSS = [
   // 选中文字用主题色，避免深色面板里出现刺眼的系统蓝
   '.dshn8n-root ::selection{background:var(--n8n-selection);}',
   '.dshn8n-themebtn{padding:5px 8px;font-size:13px;line-height:1;}',
+  '.dshn8n-root.dshn8n-dragging,.dshn8n-root.dshn8n-dragging *{transition:none !important;cursor:grabbing;}',
 ].join('\n')
 
 function el(tag, props, children) {
@@ -313,6 +314,12 @@ function createHud() {
   // ---- 主题（深色玻璃 / 奶白）----
   // 主题靠 CSS 变量切换：两套主题各写一份 CSS 会让体积翻倍，所以只换变量值。
   var theme = (NS.loadTheme && NS.loadTheme()) || 'dark'
+
+  // 位置与主题一样，要在 root 建好后立刻生效 —— 所以必须在这之前就赋好值，
+  // 否则 applyPos 读到的是 undefined（var 只提升声明，不提升赋值）。
+  var pos = (NS.loadPos && NS.loadPos()) || null
+  // 拖完松手会补发一次 click，不拦住就会「拖一下顺便把面板打开了」
+  var suppressClick = false
   var themeBtn = el('button', {
     class: 'dshn8n-btn dshn8n-themebtn',
     text: theme === 'light' ? '☾' : '☀',
@@ -381,13 +388,16 @@ function createHud() {
     }),
   ])
 
+  // 标题栏单独拿出来，作为面板的拖动把手
+  var head = el('div', { class: 'dshn8n-head' }, [
+    el('div', { class: 'dshn8n-title' }, [statusDot, el('span', { text: 'n8n 监控' })]),
+    themeBtn,
+    refreshBtn,
+    collapseBtn,
+  ])
+
   var panel = el('div', { class: 'dshn8n-panel' }, [
-    el('div', { class: 'dshn8n-head' }, [
-      el('div', { class: 'dshn8n-title' }, [statusDot, el('span', { text: 'n8n 监控' })]),
-      themeBtn,
-      refreshBtn,
-      collapseBtn,
-    ]),
+    head,
     editorSection,
     el('div', { class: 'dshn8n-body' }, [
       msgLine,
@@ -415,6 +425,8 @@ function createHud() {
 
   // root 建好之后才能挂主题类（applyTheme 会读 root）
   applyTheme(theme, false)
+  // 上次拖到哪就还放哪（没拖过则保持 CSS 的右下角默认位）
+  applyPos()
 
   function editorUrl(id) {
     // 必须用**宿主实际连接**的地址：当连接来自环境变量/插件配置而非浮窗输入框时，
@@ -442,6 +454,97 @@ function createHud() {
       .replace(/\s+/g, ' ')
       .trim()
     node.className = base + (hidden ? ' dshn8n-hidden' : '')
+  }
+
+  // ---- 拖动定位 ----
+  // 球和面板共用同一个位置：面板是从球的位置长出来的，分开记反而会错位。
+  // pos / suppressClick 在更上面就声明了（applyPos 在 root 建好后立刻要用）。
+
+  function applyPos() {
+    if (!pos) {
+      root.style.left = ''
+      root.style.top = ''
+      root.style.right = ''
+      root.style.bottom = ''
+      return
+    }
+    root.style.left = pos.left + 'px'
+    root.style.top = pos.top + 'px'
+    // 必须同时清掉 right/bottom，否则 left 和 right 一起生效会把容器拉宽
+    root.style.right = 'auto'
+    root.style.bottom = 'auto'
+  }
+
+  /** 夹在视口内，避免拖出屏幕后再也找不回来。 */
+  function setPos(left, top) {
+    var vw = (globalThis.window && globalThis.window.innerWidth) || 1280
+    var vh = (globalThis.window && globalThis.window.innerHeight) || 800
+    var w = root.offsetWidth || 60
+    var h = root.offsetHeight || 60
+    pos = {
+      left: Math.round(Math.max(0, Math.min(left, vw - w))),
+      top: Math.round(Math.max(0, Math.min(top, vh - h)))
+    }
+    applyPos()
+  }
+
+  /** 按在按钮/输入框上时不要开始拖动。 */
+  function isInteractive(el) {
+    var tag = String((el && el.tagName) || '').toLowerCase()
+    return tag === 'button' || tag === 'input' || tag === 'textarea' || tag === 'select' || tag === 'a'
+  }
+
+  function makeDraggable(handle) {
+    var dragging = false
+    var moved = false
+    var startX = 0
+    var startY = 0
+    var startLeft = 0
+    var startTop = 0
+
+    handle.addEventListener('mousedown', function (ev) {
+      // 把手本身可能就是按钮（悬浮球就是），这不算「按在交互元素上」；
+      // 只有把手**内部**的按钮/输入框才该拦下来。
+      if (ev.button !== 0 || (ev.target !== handle && isInteractive(ev.target))) return
+      var rect =
+        typeof root.getBoundingClientRect === 'function'
+          ? root.getBoundingClientRect()
+          : { left: pos ? pos.left : 0, top: pos ? pos.top : 0 }
+      dragging = true
+      moved = false
+      startX = ev.clientX
+      startY = ev.clientY
+      startLeft = rect.left
+      startTop = rect.top
+      if (ev.preventDefault) ev.preventDefault()
+    })
+
+    // 移动/松开挂在 document 上：鼠标拖出元素范围也要继续跟手
+    document.addEventListener('mousemove', function (ev) {
+      if (!dragging) return
+      var dx = ev.clientX - startX
+      var dy = ev.clientY - startY
+      // 3px 以内算手抖，不算拖动 —— 否则轻微抖动会让点击失效
+      if (!moved && Math.abs(dx) + Math.abs(dy) < 3) return
+      if (!moved) {
+        moved = true
+        // 拖动期间关掉过渡，不然位置变化会「拖尾」
+        root.className = root.className.replace(/\s*dshn8n-dragging\b/g, '') + ' dshn8n-dragging'
+      }
+      setPos(startLeft + dx, startTop + dy)
+    })
+
+    document.addEventListener('mouseup', function () {
+      if (!dragging) return
+      dragging = false
+      if (!moved) return
+      root.className = root.className.replace(/\s*dshn8n-dragging\b/g, '')
+      if (NS.savePos) NS.savePos(pos)
+      suppressClick = true
+      setTimeout(function () {
+        suppressClick = false
+      }, 0)
+    })
   }
 
   function setStatus(kind) {
@@ -1260,8 +1363,14 @@ function createHud() {
   }
 
   orb.onclick = function () {
+    // 刚拖动过就别顺手把面板打开
+    if (suppressClick) return
     setCollapsed(false)
   }
+
+  // 球和标题栏都能拖
+  makeDraggable(orb)
+  makeDraggable(head)
 
   autoBtn.onclick = function () {
     if (state.editor.embeddable !== true) return

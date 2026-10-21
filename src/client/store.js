@@ -15,6 +15,7 @@
   var NS = (globalThis.__DSH_N8N_HUD__ = globalThis.__DSH_N8N_HUD__ || {})
   var LS_KEY = 'dsh-n8n-lg:hud-config'
   var THEME_KEY = 'dsh-n8n-lg:theme'
+  var POS_KEY = 'dsh-n8n-lg:pos'
   var DEFAULT_BASE_URL = 'http://127.0.0.1:5678'
   var API_BASE = '/api/dsh-n8n-lg'
   var DEFAULT_TIMEOUT_MS = 20000
@@ -34,6 +35,35 @@
       if (globalThis.localStorage) globalThis.localStorage.setItem(THEME_KEY, theme)
     } catch (e) {
       /* 存不了就只在本次会话生效 */
+    }
+  }
+
+  /**
+   * 读浮窗位置。没拖过时返回 null（用 CSS 的右下角默认位）。
+   * 只接受有限数字，防止存进去的脏数据把浮窗甩到屏幕外。
+   */
+  function loadPos() {
+    try {
+      var raw = globalThis.localStorage && globalThis.localStorage.getItem(POS_KEY)
+      if (!raw) return null
+      var v = JSON.parse(raw)
+      if (!v || typeof v !== 'object') return null
+      var left = Number(v.left)
+      var top = Number(v.top)
+      if (!isFinite(left) || !isFinite(top)) return null
+      return { left: left, top: top }
+    } catch (e) {
+      return null
+    }
+  }
+
+  function savePos(pos) {
+    try {
+      if (!globalThis.localStorage) return
+      if (!pos) globalThis.localStorage.removeItem(POS_KEY)
+      else globalThis.localStorage.setItem(POS_KEY, JSON.stringify(pos))
+    } catch (e) {
+      /* 同上 */
     }
   }
 
@@ -150,6 +180,8 @@
   NS.saveConfig = saveConfig
   NS.loadTheme = loadTheme
   NS.saveTheme = saveTheme
+  NS.loadPos = loadPos
+  NS.savePos = savePos
   NS.pushConfig = pushConfig
   NS.clearHostConfig = clearHostConfig
   NS.fetchStatus = fetchStatus
