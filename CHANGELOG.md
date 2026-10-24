@@ -5,6 +5,29 @@
 
 ## [0.6.0] - 2026-10-21
 
+### 适配 DSH 桌面端 0.2.1-rc.3
+
+在 rc.3 上做了完整验证：**代码不需要任何改动**。
+
+对比两版的宿主 API，全部一致：
+
+| 接口 | rc.2 | rc.3 |
+|---|---|---|
+| `sessionController.prompt` | `(request, source)` | `(request, source)` |
+| content part | `{ type, text }` | 同 |
+| `sessionController.list` | `list()` | `list(signal)` —— 新增可选参数 |
+| 会话字段 | `sessionId / updatedAt / agentAvailable / …` | 同 |
+| `defineTool` | ✓ | ✓ |
+
+实测：rc.3 上启动无错误，`/health` 返回 `aiBridge: true`，`sessionShape` 结构一致，297 个测试全过。
+
+**没有升级 devDependency**：`dsh-tools@rc.3` 的 peer 依赖 `dsh-llm@rc.3` 本地没有，
+硬升会让别人的 `npm install` 直接失败（ERESOLVE）。而 `^0.2.1-rc.2` 在 semver 上
+本来就覆盖 rc.3，编译期用到的 `defineTool` 签名两版一致 —— 升级只有心理收益，没有实际收益。
+
+README 补了一节「宿主版本兼容性」，列出依赖的三个宿主接口，以及它们都是**探测而非假设**
+（拿不到就降级，不会整体崩）。
+
 ### 新增：主题切换（深色玻璃 / 奶白）
 
 浮窗右上角多了一个 ☀ / ☾ 按钮，一键在**深色玻璃**和**奶白**之间切换，选择记在

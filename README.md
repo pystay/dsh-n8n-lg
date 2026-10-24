@@ -61,6 +61,24 @@ dsh plugin --profile desktop add dsh-n8n-lg
 
 > 装完记得**重启对应 profile / DSH 桌面端**。
 
+### 宿主版本兼容性
+
+已在 **DSH 桌面端 `0.2.1-rc.2` 和 `0.2.1-rc.3`** 上验证（两版的宿主 API 没有变化）。
+
+用到的宿主接口：
+
+| 接口 | 用途 |
+|---|---|
+| `defineTool` / `ctx.tools.register` | 注册 21 个 n8n 工具 |
+| `webServer.register({ kind, path, handler })` | 浮窗的 `/api/dsh-n8n-lg/*` 代理路由 |
+| `sessionController.prompt({ sessionId, requestId, content })` | 画布上「右键节点让 AI 改」的投递通道 |
+
+这些都在启动时**探测**而非假设：拿不到 `webServer` 就跳过路由并告警，拿不到
+`sessionController` 就把 `/health` 的 `aiBridge` 置为 `false`，浮窗据此提示不可用 ——
+宿主换版本时不会整个插件崩掉，只是对应功能降级。
+
+`peerDependencies` 全部写成 `*`（由宿主提供），运行时零依赖。
+
 ---
 
 ## 配置
