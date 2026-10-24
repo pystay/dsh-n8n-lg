@@ -45,4 +45,8 @@ const out = banner + body + footer
 mkdirSync(join(root, 'lib'), { recursive: true })
 writeFileSync(join(root, 'lib/client.js'), out, 'utf8')
 
-console.log(`[dsh-n8n-lg] built lib/client.js — ${out.length} bytes from ${SOURCES.length} sources`)
+// 注意用字节数而不是 out.length：后者是 JS 字符串长度（UTF-16 code unit），
+// 文件里有中文，UTF-8 下每个汉字占 3 字节，两者差 10% 以上，容易让人以为产物不对。
+console.log(
+  `[dsh-n8n-lg] built lib/client.js — ${Buffer.byteLength(out, 'utf8')} bytes from ${SOURCES.length} sources`
+)
