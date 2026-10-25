@@ -40,3 +40,7 @@ third_party/
 
 # npm 凭据（绝不入库）
 .npmrc
+
+# 视频工程：源码提交，依赖与渲染产物不提交
+remotion-videos/node_modules/
+remotion-videos/out/
