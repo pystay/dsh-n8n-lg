@@ -445,9 +445,23 @@ function createHud() {
     state.collapsed = v
     toggleHidden(panel, v)
     toggleHidden(orb, !v)
+
+    if (v) {
+      // 收起时把球送回右下角默认位。
+      //
+      // 之前这里什么都不做，于是有个很烦的现象：球在右下角时展开面板，
+      // 下面的夹取会把 pos 从 1226 压到 928（面板 352 宽放不下），
+      // 再收起时球就停在 928 —— 用户看到的是「球跳到别的地方去了」。
+      // 收起即归位，行为可预期，也不用记展开时的位置。
+      pos = null
+      applyPos()
+      if (NS.savePos) NS.savePos(null)
+      return
+    }
+
     // 展开时面板比球大得多：如果之前把球拖到了屏幕最右边/最下边，
     // 直接展开会有半个面板在屏幕外，这里重新夹一下。
-    if (!v && pos) {
+    if (pos) {
       var size = visibleSize()
       var vw = (globalThis.window && globalThis.window.innerWidth) || 1280
       var vh = (globalThis.window && globalThis.window.innerHeight) || 800

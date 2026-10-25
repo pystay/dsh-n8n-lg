@@ -1095,6 +1095,39 @@ describe('拖动定位', () => {
     expect(root.style.top).toBe('746px')
   })
 
+  it('收起后悬浮球回到右下角（回归：展开时的夹取会把球推走）', async () => {
+    const { dom, posCalls, timers } = mountHud({})
+    await flush()
+    const root = dom.all().find((n) => n.className.startsWith('dshn8n-root'))
+    const orb = dom.all().find((n) => n.className.includes('dshn8n-orb'))
+
+    // 初始是展开态，先收起，这样拖动才按球（54×54）算边界
+    byText(dom, '—').events.click()
+
+    // 把球拖到最右下角 → 1226 / 746
+    grab(dom, orb, 100, 100)
+    fireDoc(dom, 'mousemove', { clientX: 99999, clientY: 99999 })
+    fireDoc(dom, 'mouseup', {})
+    expect(root.style.left).toBe('1226px')
+    expect(root.style.top).toBe('746px')
+
+    // 拖完会短暂屏蔽点击（防止"拖一下顺手把面板打开"），推进定时器让它复位
+    timers.flushTimeouts()
+
+    // 展开：面板 352 宽在这个位置放不下，会被夹到 928 —— 这里就是球"跳走"的根源
+    orb.onclick()
+    expect(root.style.left).toBe('928px')
+
+    // 收起：必须回右下角默认位（left/top 清空，交回 CSS 的 right/bottom）
+    byText(dom, '—').events.click()
+    expect(root.style.left).toBe('')
+    expect(root.style.top).toBe('')
+    expect(root.style.right).toBe('')
+    expect(root.style.bottom).toBe('')
+    // 同时把记住的位置清掉，否则下次启动又回到被夹过的坐标
+    expect(posCalls.at(-1)).toBe(null)
+  })
+
   it('启动时按记住的位置摆放', async () => {
     const { dom } = mountHud({ pos: { left: 120, top: 80 } })
     await flush()
