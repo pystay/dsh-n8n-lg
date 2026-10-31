@@ -3,7 +3,7 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [0.6.0] - 2026-10-21
+## [0.6.0] - 2026-11-01
 
 ### 修复：收起浮窗后悬浮球会「跳到别的位置」
 
